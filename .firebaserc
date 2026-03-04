@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "requisition": "leyeco-requisition-v2",
+    "default": "leyeco-requisition-v2"
+  },
+  "targets": {},
+  "etags": {}
+}

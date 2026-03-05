@@ -40,8 +40,8 @@ const currentPage = ref(1)
 const tableContainer = ref(null)
 let unsubscribe = null
 
-const isPurchaser = computed(() => authStore.role === USER_ROLES.PURCHASER)
-const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
+const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
+const hasSignature = computed(() => !!authStore?.userProfile?.signatureData)
 
 const approvedRequisitions = computed(() => [...requisitions.value, ...moreRequisitions.value])
 
@@ -144,12 +144,14 @@ async function saveMarkOrdered() {
   actionLoading.value = true
   actionError.value = ''
   try {
-    const user = authStore.user
+    const user = authStore?.user
     await markRequisitionOrdered(modalOrdered.value.id, {
       poNumber: poNumber.value.trim() || undefined,
       orderedAt: orderedAt.value ? new Date(orderedAt.value + 'T12:00:00') : new Date(),
-      orderedBy: user ? { userId: user.uid, name: authStore.displayName, email: user.email } : null,
-      signatureData: authStore.userProfile?.signatureData,
+      orderedBy: user
+        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
+        : null,
+      signatureData: authStore?.userProfile?.signatureData,
     })
     closeOrderedModal()
   } catch (e) {
@@ -181,13 +183,13 @@ async function saveMarkReceived() {
   actionLoading.value = true
   actionError.value = ''
   try {
-    const user = authStore.user
+    const user = authStore?.user
     await markRequisitionReceived(modalReceived.value.id, {
       receivedAt: receivedAt.value ? new Date(receivedAt.value + 'T12:00:00') : new Date(),
       receivedBy: user
-        ? { userId: user.uid, name: authStore.displayName, email: user.email }
+        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
         : null,
-      signatureData: authStore.userProfile?.signatureData,
+      signatureData: authStore?.userProfile?.signatureData,
     })
     closeReceivedModal()
   } catch (e) {
@@ -223,7 +225,7 @@ async function loadMore() {
 onMounted(() => {
   loading.value = true
   error.value = null
-  if (!authStore.user) {
+  if (!authStore?.user) {
     loading.value = false
     return
   }

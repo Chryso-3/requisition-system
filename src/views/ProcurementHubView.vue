@@ -48,8 +48,8 @@ const receivedAt = ref('')
 
 let unsubscribes = []
 
-const isPurchaser = computed(() => authStore.role === USER_ROLES.PURCHASER)
-const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
+const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
+const hasSignature = computed(() => !!authStore?.userProfile?.signatureData)
 
 // Computed list for the active tab
 const filteredList = computed(() => {

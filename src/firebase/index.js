@@ -2,6 +2,7 @@ import { initializeApp, getApp, getApps } from 'firebase/app'
 import { initializeFirestore, getFirestore, memoryLocalCache } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
 import { getStorage } from 'firebase/storage'
+import { getFunctions } from 'firebase/functions'
 import { getAnalytics, isSupported } from 'firebase/analytics'
 
 const firebaseConfig = {
@@ -33,6 +34,7 @@ export const db = dbInstance
 
 export const auth = getAuth(app)
 export const storage = getStorage(app)
+export const functions = getFunctions(app, 'us-central1')
 
 // Analytics (browser only)
 let analytics = null

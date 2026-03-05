@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   subscribeRequisitions,
-  loadMoreRequisitions,
+  getRequisitionCount,
   APPROVAL_WORKFLOW,
   REQUISITION_PAGE_SIZE,
 } from '@/services/requisitionService'
@@ -16,14 +16,12 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const requisitions = ref([])
-const moreRequisitions = ref([])
-const lastDoc = ref(null)
-const hasMore = ref(false)
-const loadingMore = ref(false)
+const totalItems = ref(0)
 const loading = ref(true)
 const error = ref(null)
-const pageSize = ref(10)
+const pageSize = ref(REQUISITION_PAGE_SIZE)
 const currentPage = ref(1)
+const lastDocs = ref([]) // For jump-to-page
 const tableContainer = ref(null)
 let unsubscribe = null
 
@@ -33,9 +31,11 @@ const filterStatus = ref('')
 // Approver toggle: inbox vs "my history"
 const showAll = ref(false)
 
-const isRequester = computed(() => authStore.role === USER_ROLES.REQUESTER)
-const isGM = computed(() => authStore.role === USER_ROLES.GENERAL_MANAGER)
-const approverWorkflow = computed(() => APPROVAL_WORKFLOW[authStore.role])
+const isRequester = computed(() => authStore?.role === USER_ROLES.REQUESTER)
+const isGM = computed(() => authStore?.role === USER_ROLES.GENERAL_MANAGER)
+const approverWorkflow = computed(() =>
+  authStore?.role ? APPROVAL_WORKFLOW[authStore.role] : null,
+)
 
 const statusLabel = {
   [REQUISITION_STATUS.DRAFT]: 'Draft',
@@ -48,10 +48,8 @@ const statusLabel = {
   [REQUISITION_STATUS.REJECTED]: 'Rejected',
 }
 
-const combinedRequisitions = computed(() => [...requisitions.value, ...moreRequisitions.value])
-
 const filteredRequisitions = computed(() => {
-  const list = combinedRequisitions.value
+  const list = requisitions.value
   const w = approverWorkflow.value
 
   // Approver inbox: only items waiting for my approval
@@ -69,55 +67,15 @@ const filteredRequisitions = computed(() => {
     })
   }
 
-  // Requester (or fallback): allow filtering (now mostly handled server-side)
   return list
 })
 
-const totalPages = computed(
-  () => Math.ceil(filteredRequisitions.value.length / pageSize.value) || 1,
-)
+const totalPages = computed(() => Math.ceil(totalItems.value / pageSize.value) || 1)
+const paginatedRequisitions = computed(() => filteredRequisitions.value)
 
-const paginatedRequisitions = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredRequisitions.value.slice(start, start + pageSize.value)
-})
-
-function handlePageChange(p) {
-  currentPage.value = p
-
-  // Smooth scroll back to top of table
-  if (tableContainer.value) {
-    tableContainer.value.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  // Buffered Load More
-  const currentViewEnd = p * pageSize.value
-  const bufferEnd = combinedRequisitions.value.length
-  if (currentViewEnd > bufferEnd - 15 && hasMore.value && !loadingMore.value) {
-    loadMore()
-  }
-}
-
-watch([filterStatus, showAll, pageSize], () => {
-  currentPage.value = 1
-})
-
-const inboxCount = computed(() => {
-  const w = approverWorkflow.value
-  if (!w) return 0
-  return combinedRequisitions.value.filter((r) => r.status === w.canApproveStatus).length
-})
-
-const historyCount = computed(() => {
-  const w = approverWorkflow.value
-  if (!w) return 0
-  const myId = authStore.user?.uid
-  return combinedRequisitions.value.filter((r) => {
-    const approvedByMe = r?.[w.field]?.userId && r?.[w.field]?.userId === myId
-    const declinedByMe = r?.rejectedBy?.userId && r?.rejectedBy?.userId === myId
-    return !!(approvedByMe || declinedByMe)
-  }).length
-})
+// Inbox/History counts for approvers (now derived from summary or just the current list for simplicity)
+const inboxCount = ref(0)
+const historyCount = ref(0)
 
 const headerSubtitle = computed(() => {
   const w = approverWorkflow.value
@@ -134,62 +92,53 @@ function needsMyApproval(r) {
   return w && r.status === w.canApproveStatus
 }
 
-function startRealtime() {
+async function refreshData() {
   if (unsubscribe) unsubscribe()
-
-  // Only show full-page loading if we have no data at all
-  if (requisitions.value.length === 0) {
-    loading.value = true
-  }
-
+  loading.value = true
   error.value = null
-  moreRequisitions.value = []
-  lastDoc.value = null
-  hasMore.value = false
 
-  const filters = {}
-  if (filterStatus.value) {
-    filters.status = filterStatus.value
-  }
-
-  unsubscribe = subscribeRequisitions(
-    filters,
-    (results, lastDocSnapshot) => {
-      requisitions.value = results
-      lastDoc.value = lastDocSnapshot
-      hasMore.value = results.length === REQUISITION_PAGE_SIZE
-      error.value = null
-      loading.value = false
-    },
-    (err) => {
-      error.value = err?.message || 'Failed to load requisitions.'
-      loading.value = false
-    },
-    { pageSize: REQUISITION_PAGE_SIZE },
-  )
-}
-
-async function loadMore() {
-  if (!lastDoc.value || loadingMore.value || !hasMore.value) return
-  loadingMore.value = true
   try {
     const filters = {}
     if (filterStatus.value) {
       filters.status = filterStatus.value
     }
-    const {
-      requisitions: next,
-      lastDoc: nextLastDoc,
-      hasMore: nextHasMore,
-    } = await loadMoreRequisitions(filters, lastDoc.value, REQUISITION_PAGE_SIZE)
-    moreRequisitions.value = [...moreRequisitions.value, ...next]
-    lastDoc.value = nextLastDoc
-    hasMore.value = nextHasMore
-  } catch (e) {
-    error.value = e?.message || 'Failed to load more.'
-  } finally {
-    loadingMore.value = false
+    const w = approverWorkflow.value
+    if (w && !showAll.value) {
+      filters.status = w.canApproveStatus
+    }
+    // Note: History filter (showAll) usually requires a different query approach if filtering by "approvedByMe".
+    // For now, we'll implement totalItems for the current filter set.
+    totalItems.value = await getRequisitionCount(filters)
+
+    const startAfter = currentPage.value > 1 ? lastDocs.value[currentPage.value - 2] : null
+
+    unsubscribe = subscribeRequisitions(
+      filters,
+      (data, lastDocSnap) => {
+        requisitions.value = data
+        if (lastDocSnap) {
+          lastDocs.value[currentPage.value - 1] = lastDocSnap
+        }
+        loading.value = false
+      },
+      (err) => {
+        error.value = err?.message || 'Failed to load.'
+        loading.value = false
+      },
+      { pageSize: pageSize.value, startAfter },
+    )
+  } catch (err) {
+    error.value = err.message
+    loading.value = false
   }
+}
+
+function handlePageChange(p) {
+  currentPage.value = p
+  if (tableContainer.value) {
+    tableContainer.value.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  refreshData()
 }
 
 function formatDate(val) {
@@ -203,7 +152,7 @@ function goToDetail(id) {
 }
 
 watch(
-  () => authStore.role,
+  () => authStore?.role,
   () => {
     // Approvers default to inbox; requesters keep their filter
     if (approverWorkflow.value) {
@@ -214,12 +163,13 @@ watch(
   { immediate: true },
 )
 
-watch(filterStatus, () => {
+watch([filterStatus, showAll], () => {
   currentPage.value = 1
-  startRealtime()
+  lastDocs.value = []
+  refreshData()
 })
 
-onMounted(startRealtime)
+onMounted(refreshData)
 
 onUnmounted(() => {
   if (unsubscribe) unsubscribe()
@@ -392,8 +342,8 @@ onUnmounted(() => {
             :current-page="currentPage"
             :total-pages="totalPages"
             :page-size="pageSize"
-            :total-items="filteredRequisitions.length"
-            :loading="loading || loadingMore"
+            :total-items="totalItems"
+            :loading="loading"
             @page-change="handlePageChange"
           />
         </div>

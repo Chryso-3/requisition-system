@@ -19,13 +19,12 @@ import {
   increment,
   getCountFromServer,
 } from 'firebase/firestore'
+import { db } from '../firebase'
 
 /** Default page size for list views (keeps reads and UI responsive with many users/requests). */
 export const REQUISITION_PAGE_SIZE = 50
 /** Max requisitions in a single query (cap for admin/export). */
 export const REQUISITION_LIST_LIMIT = 5000
-
-import { db } from '../firebase'
 import {
   COLLECTIONS,
   REQUISITION_STATUS,
@@ -153,25 +152,6 @@ export { REQUISITION_STATUS }
 const ANALYTICS_SUMMARY_ID = 'summary'
 
 /**
- * Increment/decrement counters in the analytics/summary document.
- * @param {object} changes - flat key→delta map, e.g. { 'byStatus.draft': 1, 'total': 1 }
- */
-export async function updateAnalyticsSummary(changes) {
-  try {
-    const ref = doc(db, COLLECTIONS.ANALYTICS, ANALYTICS_SUMMARY_ID)
-    const updates = { lastUpdated: serverTimestamp() }
-    for (const [key, delta] of Object.entries(changes)) {
-      // Firestore nested field updates use dot-notation strings as keys
-      updates[key] = increment(delta)
-    }
-    await setDoc(ref, updates, { merge: true })
-  } catch (e) {
-    // Analytics failures should never block the main operation
-    console.warn('[analytics] Failed to update summary:', e?.message)
-  }
-}
-
-/**
  * Subscribe to the analytics/summary document for realtime KPI updates.
  */
 export function subscribeAnalyticsSummary(onData, onError) {
@@ -197,11 +177,13 @@ export function subscribeAnalyticsSummary(onData, onError) {
  */
 export async function seedAnalyticsSummary() {
   const base = collection(db, COLLECTIONS.REQUISITIONS)
-  const snap = await getDocs(
-    query(base, orderBy('createdAt', 'desc'), limit(REQUISITION_LIST_LIMIT)),
-  )
+  // Use getDocs without orderBy to ensure we don't skip docs missing the 'createdAt' field
+  const snap = await getDocs(query(base, limit(REQUISITION_LIST_LIMIT)))
   const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
   console.log(`[Seeding] Found ${docs.length} requisitions to process.`)
+
+  const now = new Date()
+  const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 
   const summary = {
     total: docs.length,
@@ -213,8 +195,22 @@ export async function seedAnalyticsSummary() {
     totalApprovedValue: 0,
     departmentalSpend: {},
     durations: {},
+    summary: {
+      pendingApproval: 0,
+      approvedThisMonth: 0,
+      rejectedThisMonth: 0,
+      approvedPct: 0,
+      rejectedPct: 0,
+      avgLeadTimeDays: '—',
+      totalApprovedValue: 0,
+    },
     lastUpdated: serverTimestamp(),
   }
+
+  let totalLeadTimeMs = 0
+  let leadTimeCount = 0
+  let totalApprovedCount = 0
+  let totalRejectedCount = 0
 
   docs.forEach((r) => {
     // Status counts
@@ -237,9 +233,17 @@ export async function seedAnalyticsSummary() {
         : null
 
     if (monthKey) {
-      if (!summary.byMonth[monthKey]) summary.byMonth[monthKey] = { count: 0, value: 0 }
+      if (!summary.byMonth[monthKey]) {
+        summary.byMonth[monthKey] = { count: 0, value: 0, approved: 0, rejected: 0 }
+      }
       summary.byMonth[monthKey].count++
     }
+
+    const archDate = toDate(r.archivedAt)
+    const archMonthKey =
+      archDate && !Number.isNaN(archDate.getTime())
+        ? `${archDate.getFullYear()}-${String(archDate.getMonth() + 1).padStart(2, '0')}`
+        : null
 
     // Financials & Purchase
     const isRel = s === REQUISITION_STATUS.APPROVED || r.purchaseStatus === PURCHASE_STATUS.RECEIVED
@@ -253,15 +257,47 @@ export async function seedAnalyticsSummary() {
       if (monthKey) summary.byMonth[monthKey].value += val
     }
 
+    // Global status buckets
     if (s === REQUISITION_STATUS.APPROVED) {
+      totalApprovedCount++
+      if (monthKey === thisMonthKey) summary.summary.approvedThisMonth++
+      if (archMonthKey) {
+        if (!summary.byMonth[archMonthKey]) {
+          summary.byMonth[archMonthKey] = { count: 0, value: 0, approved: 0, rejected: 0 }
+        }
+        summary.byMonth[archMonthKey].approved++
+      }
+
       const ps = r.purchaseStatus || PURCHASE_STATUS.PENDING
       summary.purchaseBreakdown[ps] = (summary.purchaseBreakdown[ps] || 0) + 1
 
       const pos = r.poStatus || null
       if (pos) {
         summary.poByStatus[pos] = (summary.poByStatus[pos] || 0) + 1
-        console.log(`[Seeding] Found PO ${r.poNumber} with status: ${pos}`)
       }
+    } else if (s === REQUISITION_STATUS.REJECTED) {
+      totalRejectedCount++
+      if (monthKey === thisMonthKey) summary.summary.rejectedThisMonth++
+      if (archMonthKey) {
+        if (!summary.byMonth[archMonthKey]) {
+          summary.byMonth[archMonthKey] = { count: 0, value: 0, approved: 0, rejected: 0 }
+        }
+        summary.byMonth[archMonthKey].rejected++
+      }
+    } else if (s !== REQUISITION_STATUS.DRAFT) {
+      summary.summary.pendingApproval++
+    }
+
+    // Lead Time calculation (Submission to Archive/End)
+    const created = toDate(r.createdAt || r.date)
+    const endAt = toDate(r.archivedAt || r.receivedAt || r.approvedAt)
+    if (
+      created &&
+      endAt &&
+      (s === REQUISITION_STATUS.APPROVED || s === REQUISITION_STATUS.REJECTED)
+    ) {
+      totalLeadTimeMs += Math.max(0, endAt - created)
+      leadTimeCount++
     }
 
     // Durations (Simple seeding for velocity)
@@ -319,8 +355,15 @@ export async function seedAnalyticsSummary() {
     })
   })
 
-  console.log('[Seeding] poByStatus breakdown:', summary.poByStatus)
-  console.log('[Seeding] Durations keys:', Object.keys(summary.durations))
+  // Finalize global summary KPIs
+  const allDecisions = totalApprovedCount + totalRejectedCount
+  summary.summary.approvedPct =
+    allDecisions > 0 ? Math.round((totalApprovedCount / allDecisions) * 100) : 0
+  summary.summary.rejectedPct =
+    allDecisions > 0 ? Math.round((totalRejectedCount / allDecisions) * 100) : 0
+  summary.summary.totalApprovedValue = summary.totalApprovedValue
+  summary.summary.avgLeadTimeDays =
+    leadTimeCount > 0 ? (totalLeadTimeMs / leadTimeCount / (1000 * 60 * 60 * 24)).toFixed(1) : '—'
 
   const ref = doc(db, COLLECTIONS.ANALYTICS, ANALYTICS_SUMMARY_ID)
   await setDoc(ref, summary)
@@ -445,17 +488,23 @@ export const createRequisition = (data = {}) => ({
 })
 
 /**
- * Generate RF Control Number (e.g., 163623) via atomic counter.
- * Uses counters/requisitionRf so requesters don't need to read other users' requisitions.
+ * Generate RF Control Number via secure Cloud Function.
  */
 export async function generateRfControlNo() {
+  const year = new Date().getFullYear()
   const counterRef = doc(db, 'counters', 'requisitionRf')
+
+  /**
+   * ATOMIC CLIENT-SIDE GENERATION
+   * Directly uses Firestore transactions for reliable, adjustable number generation.
+   * This respects manual adjustments made in the Admin panel and avoids CORS issues.
+   */
   return runTransaction(db, async (tx) => {
     const snap = await tx.get(counterRef)
     const lastNo = snap.exists() ? snap.data().lastNo || 0 : 0
     const nextNo = lastNo + 1
-    await tx.set(counterRef, { lastNo: nextNo })
-    return String(nextNo).padStart(6, '0')
+    await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
+    return `RF-${year}-${String(nextNo).padStart(6, '0')}`
   })
 }
 
@@ -470,8 +519,8 @@ export async function generateCanvassNo() {
     const snap = await tx.get(counterRef)
     const lastNo = snap.exists() ? snap.data().lastNo || 0 : 0
     const nextNo = lastNo + 1
-    await tx.set(counterRef, { lastNo: nextNo })
-    return `CO-${year}-${String(nextNo).padStart(3, '0')}`
+    await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
+    return `CO-${year}-${String(nextNo).padStart(6, '0')}`
   })
 }
 
@@ -486,8 +535,8 @@ export async function generatePoNo() {
     const snap = await tx.get(counterRef)
     const lastNo = snap.exists() ? snap.data().lastNo || 0 : 0
     const nextNo = lastNo + 1
-    await tx.set(counterRef, { lastNo: nextNo })
-    return `PO-${year}-${String(nextNo).padStart(3, '0')}`
+    await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
+    return `PO-${year}-${String(nextNo).padStart(6, '0')}`
   })
 }
 
@@ -1039,6 +1088,34 @@ function buildArchivedRequisitionsQuery(opts = {}) {
   ]
   if (startAfterDoc) constraints.push(startAfter(startAfterDoc))
   return query(base, ...constraints)
+}
+
+/**
+ * Get total count of requisitions for pagination.
+ * @param {object} filters - same as buildRequisitionsQuery
+ */
+export async function getRequisitionCount(filters = {}) {
+  const base = collection(db, COLLECTIONS.REQUISITIONS)
+  const constraints = []
+  if (filters.requestedBy) {
+    constraints.push(where('requestedBy.userId', '==', filters.requestedBy))
+  }
+  if (filters.status) {
+    if (Array.isArray(filters.status)) {
+      constraints.push(where('status', 'in', filters.status))
+    } else {
+      constraints.push(where('status', '==', filters.status))
+    }
+  }
+  if (filters.purchaseStatus) {
+    constraints.push(where('purchaseStatus', '==', filters.purchaseStatus))
+  }
+  if (filters.canvassStatus && !Array.isArray(filters.canvassStatus)) {
+    constraints.push(where('canvassStatus', '==', filters.canvassStatus))
+  }
+  const q = query(base, ...constraints)
+  const snapshot = await getCountFromServer(q)
+  return snapshot.data().count
 }
 
 /**

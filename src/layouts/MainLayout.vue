@@ -23,26 +23,28 @@ const showUserMenu = ref(false)
 const pendingCount = ref(0)
 const pendingPOCount = ref(0)
 
-const roleLabel = computed(() => USER_ROLE_LABELS[authStore.role] || 'User')
-const isRequestor = computed(() => authStore.role === USER_ROLES.REQUESTER)
-const isApprover = computed(() => authStore.role !== USER_ROLES.REQUESTER)
-const isInternalAuditor = computed(() => authStore.role === USER_ROLES.INTERNAL_AUDITOR)
+const roleLabel = computed(() =>
+  authStore?.role ? USER_ROLE_LABELS[authStore.role] || 'User' : 'Loading...',
+)
+const isRequestor = computed(() => authStore?.role === USER_ROLES.REQUESTER)
+const isApprover = computed(() => authStore?.role && authStore.role !== USER_ROLES.REQUESTER)
+const isInternalAuditor = computed(() => authStore?.role === USER_ROLES.INTERNAL_AUDITOR)
 const canViewLogs = computed(
   () =>
-    authStore.role === USER_ROLES.INTERNAL_AUDITOR ||
-    authStore.role === USER_ROLES.GENERAL_MANAGER ||
-    authStore.role === USER_ROLES.SUPER_ADMIN,
+    authStore?.role === USER_ROLES.INTERNAL_AUDITOR ||
+    authStore?.role === USER_ROLES.GENERAL_MANAGER ||
+    authStore?.role === USER_ROLES.SUPER_ADMIN,
 )
-const isGeneralManager = computed(() => authStore.role === USER_ROLES.GENERAL_MANAGER)
-const isPurchaser = computed(() => authStore.role === USER_ROLES.PURCHASER)
-const isBACSecretary = computed(() => authStore.role === USER_ROLES.BAC_SECRETARY)
-const isSuperAdmin = computed(() => authStore.role === USER_ROLES.SUPER_ADMIN)
+const isGeneralManager = computed(() => authStore?.role === USER_ROLES.GENERAL_MANAGER)
+const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
+const isBACSecretary = computed(() => authStore?.role === USER_ROLES.BAC_SECRETARY)
+const isSuperAdmin = computed(() => authStore?.role === USER_ROLES.SUPER_ADMIN)
 
 async function loadPendingCount() {
   if (!isApprover.value) return
   try {
     // 1. Requisition Pending Count
-    const workflow = APPROVAL_WORKFLOW[authStore.role]
+    const workflow = authStore?.role ? APPROVAL_WORKFLOW[authStore.role] : null
     if (workflow) {
       const reqs = await listRequisitionsSimple({ status: workflow.canApproveStatus })
       pendingCount.value = reqs.length
@@ -50,9 +52,9 @@ async function loadPendingCount() {
 
     // 2. PO Pending Count
     let poStatusFilter = null
-    if (authStore.role === USER_ROLES.BUDGET_OFFICER) poStatusFilter = 'pending_budget'
-    else if (authStore.role === USER_ROLES.INTERNAL_AUDITOR) poStatusFilter = 'pending_audit'
-    else if (authStore.role === USER_ROLES.GENERAL_MANAGER) poStatusFilter = 'pending_gm'
+    if (authStore?.role === USER_ROLES.BUDGET_OFFICER) poStatusFilter = 'pending_budget'
+    else if (authStore?.role === USER_ROLES.INTERNAL_AUDITOR) poStatusFilter = 'pending_audit'
+    else if (authStore?.role === USER_ROLES.GENERAL_MANAGER) poStatusFilter = 'pending_gm'
 
     if (poStatusFilter) {
       const poReqs = await listRequisitionsSimple({ poStatus: poStatusFilter })
@@ -272,6 +274,7 @@ watch(
           </router-link>
           <router-link
             v-if="
+              authStore?.role &&
               ['budget_officer', 'internal_auditor', 'general_manager'].includes(authStore.role)
             "
             to="/po-approvals"

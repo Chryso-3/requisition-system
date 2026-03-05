@@ -16,7 +16,8 @@ import { getDeptAbbreviation } from '@/utils/deptUtils'
 const authStore = useAuthStore()
 const isAdmin = computed(
   () =>
-    authStore.role === USER_ROLES.GENERAL_MANAGER || authStore.role === USER_ROLES.INTERNAL_AUDITOR,
+    authStore?.role === USER_ROLES.GENERAL_MANAGER ||
+    authStore?.role === USER_ROLES.INTERNAL_AUDITOR,
 )
 
 const router = useRouter()
@@ -81,7 +82,7 @@ function requisitionToCsvRow(r) {
     'RF Control No.': r.rfControlNo || '',
     Date: dateIso,
     Department: r.department || '',
-    Status: r.status || '',
+    Status: getResolutionLabel(r),
     Purpose: r.purpose || '',
     'Requested By': r.requestedBy?.name || '',
     'Recommending Approval': r.recommendingApproval?.name || '',
@@ -129,13 +130,14 @@ const overRetentionCount = computed(
 
 function getResolutionLabel(r) {
   if (r.status === 'rejected') return 'Rejected'
+  if (r.poStatus === 'rejected') return 'PO Rejected'
   if (r.status === 'approved' && (r.purchaseStatus === 'received' || r.isArchived))
     return 'Fulfilled'
   return statusLabel[r.status] || r.status
 }
 
 function getResolutionClass(r) {
-  if (r.status === 'rejected') return 'status-rejected'
+  if (r.status === 'rejected' || r.poStatus === 'rejected') return 'status-rejected'
   if (r.status === 'approved' && (r.purchaseStatus === 'received' || r.isArchived))
     return 'status-fulfilled'
   return 'status-default'
@@ -300,6 +302,11 @@ function downloadAllCsv() {
   URL.revokeObjectURL(url)
 }
 
+async function executeSafeDownload() {
+  downloadAllCsv()
+  closeDownloadConfirmModal()
+}
+
 async function executeDownloadThenDeleteAll() {
   const list = archivedRequisitions.value
   if (!list.length) return
@@ -307,12 +314,17 @@ async function executeDownloadThenDeleteAll() {
   deleteAllError.value = null
   try {
     downloadAllCsv()
-    for (const r of list) {
+    // ONLY delete records older than the retention policy!
+    const itemsToDelete = list.filter((r) => isOverRetentionDays(r))
+    for (const r of itemsToDelete) {
       await deleteRequisition(r.id)
     }
     error.value = null
     showDownloadConfirmModal.value = false
     deleteAllError.value = null
+    if (itemsToDelete.length > 0) {
+      alert(`Export successful. Purged ${itemsToDelete.length} ancient record(s).`)
+    }
   } catch (e) {
     const msg = e?.message || 'Failed to delete some items.'
     error.value = msg
@@ -423,72 +435,6 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <div v-if="showCustomRange" class="modal-overlay" @click.self="closeCustomRange">
-      <div class="modal">
-        <div class="modal-title">Select dates</div>
-        <div class="modal-desc">Filter archive by start and end date.</div>
-        <div class="modal-fields">
-          <label class="date-field">
-            <span>From</span>
-            <input v-model="draftStartDate" type="date" />
-          </label>
-          <label class="date-field">
-            <span>To</span>
-            <input v-model="draftEndDate" type="date" />
-          </label>
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="btn-cancel" @click="closeCustomRange">Cancel</button>
-          <button type="button" class="btn-primary" @click="applyCustomRange">Apply</button>
-        </div>
-      </div>
-    </div>
-
-    <Transition name="modal-fade">
-      <div
-        v-if="showDownloadConfirmModal"
-        class="download-confirm-overlay"
-        @click.self="closeDownloadConfirmModal"
-      >
-        <div class="download-confirm-backdrop" aria-hidden="true"></div>
-        <div
-          class="download-confirm-card"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="download-confirm-modal-title"
-        >
-          <div class="download-confirm-header">
-            <h2 id="download-confirm-modal-title" class="download-confirm-title">
-              Export & Clear Archive
-            </h2>
-          </div>
-          <p class="download-confirm-desc">
-            A CSV file with <strong>{{ archivedRequisitions.length }}</strong> requisition(s) will
-            be downloaded. These records will then be permanently removed from the active database.
-          </p>
-          <p v-if="deleteAllError" class="download-confirm-err">{{ deleteAllError }}</p>
-          <div class="download-confirm-actions">
-            <button
-              type="button"
-              class="btn-cancel"
-              :disabled="deletingAll"
-              @click="closeDownloadConfirmModal"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              class="btn-primary"
-              :disabled="deletingAll"
-              @click="executeDownloadThenDeleteAll"
-            >
-              {{ deletingAll ? 'Exporting...' : 'Export & Clear' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Transition>
-
     <div class="log-panel">
       <div v-if="error" class="error-message">⚠️ {{ error }}</div>
 
@@ -594,6 +540,116 @@ onUnmounted(() => {
         />
       </div>
     </div>
+
+    <!-- Premium Export Modal (Moved to top-level to avoid backdrop-filter issues) -->
+    <Transition name="modal-fade">
+      <div
+        v-if="showDownloadConfirmModal"
+        class="export-modal-overlay premium-glass"
+        @click.self="closeDownloadConfirmModal"
+      >
+        <div
+          class="export-modal-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="export-modal-title"
+        >
+          <div class="export-modal-header">
+            <div class="export-icon-box">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" x2="12" y1="15" y2="3" />
+              </svg>
+            </div>
+            <div>
+              <h2 id="export-modal-title" class="export-modal-title">Export Log</h2>
+              <p class="export-modal-subtitle">
+                Exporting <strong>{{ archivedRequisitions.length }}</strong> entries in current
+                view.
+              </p>
+            </div>
+          </div>
+
+          <div class="export-modal-body">
+            <div class="retention-policy-box">
+              <div class="policy-header">
+                <span class="policy-icon">ℹ️</span>
+                <strong>Retention Policy</strong>
+              </div>
+              <p class="policy-text">
+                You can download your logs safely without deleting them. If you choose to Purge, the
+                system will export your data but only permanently delete records older than
+                <strong style="color: #b91c1c">{{ ARCHIVE_RETENTION_DAYS }} days</strong> to
+                maintain fast database speeds.
+              </p>
+            </div>
+            <p v-if="deleteAllError" class="export-error">{{ deleteAllError }}</p>
+          </div>
+
+          <div class="export-modal-actions">
+            <button
+              type="button"
+              class="export-btn export-btn-cancel"
+              :disabled="deletingAll"
+              @click="closeDownloadConfirmModal"
+            >
+              Cancel
+            </button>
+            <div class="export-primary-group">
+              <button
+                type="button"
+                class="export-btn export-btn-safe"
+                :disabled="deletingAll"
+                @click="executeSafeDownload"
+              >
+                {{ deletingAll ? 'Downloading...' : 'Download CSV' }}
+              </button>
+              <button
+                type="button"
+                class="export-btn export-btn-purge"
+                :disabled="deletingAll"
+                @click="executeDownloadThenDeleteAll"
+                title="Only deletes records older than 30 days"
+              >
+                {{ deletingAll ? 'Purging...' : 'Export & Purge (30+ Days)' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <div v-if="showCustomRange" class="modal-overlay" @click.self="closeCustomRange">
+      <div class="modal">
+        <div class="modal-title">Select dates</div>
+        <div class="modal-desc">Filter archive by start and end date.</div>
+        <div class="modal-fields">
+          <label class="date-field">
+            <span>From</span>
+            <input v-model="draftStartDate" type="date" />
+          </label>
+          <label class="date-field">
+            <span>To</span>
+            <input v-model="draftEndDate" type="date" />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-cancel" @click="closeCustomRange">Cancel</button>
+          <button type="button" class="btn-primary" @click="applyCustomRange">Apply</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -691,8 +747,7 @@ onUnmounted(() => {
 }
 
 /* Modals */
-.modal-overlay,
-.download-confirm-overlay {
+.modal-overlay {
   position: fixed;
   inset: 0;
   display: flex;
@@ -702,12 +757,7 @@ onUnmounted(() => {
   backdrop-filter: blur(2px);
   z-index: 100;
 }
-.download-confirm-backdrop {
-  position: absolute;
-  inset: 0;
-}
-.modal,
-.download-confirm-card {
+.modal {
   position: relative;
   background: #fff;
   padding: 1.5rem;
@@ -716,15 +766,13 @@ onUnmounted(() => {
   max-width: 400px;
   width: 100%;
 }
-.modal-title,
-.download-confirm-title {
+.modal-title {
   margin: 0 0 0.5rem;
   font-size: 1.125rem;
   font-weight: 700;
   color: #8b0000;
 }
-.modal-desc,
-.download-confirm-desc {
+.modal-desc {
   margin: 0 0 1.25rem;
   font-size: 0.875rem;
   color: #6b7280;
@@ -748,8 +796,7 @@ onUnmounted(() => {
   border-radius: 4px;
   font-size: 0.8125rem;
 }
-.modal-actions,
-.download-confirm-actions {
+.modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
@@ -778,14 +825,176 @@ onUnmounted(() => {
   opacity: 0.6;
   cursor: not-allowed;
 }
-.download-confirm-err {
+
+/* ==============================
+   PREMIUM EXPORT MODAL STYLES
+   ============================== */
+.export-modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.export-modal-card {
+  background: linear-gradient(to bottom, #ffffff, #f8fafc);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 520px;
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(226, 232, 240, 0.5);
+  overflow: hidden;
+  animation: modal-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modal-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.export-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.5rem 1.5rem 0.5rem;
+}
+
+.export-icon-box {
+  background: #f1f5f9;
+  color: #1e293b;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.8);
+  border: 1px solid #e2e8f0;
+}
+
+.export-modal-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+}
+
+.export-modal-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.875rem;
+  color: #64748b;
+}
+
+.export-modal-body {
+  padding: 1rem 1.5rem;
+}
+
+.retention-policy-box {
+  background: rgba(241, 245, 249, 0.7);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+
+.policy-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  color: #1e293b;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.policy-text {
+  margin: 0;
   font-size: 0.8125rem;
-  color: #b91c1c;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.export-error {
+  margin: 1rem 0 0;
+  padding: 0.75rem;
   background: #fef2f2;
   border: 1px solid #fecaca;
-  border-radius: 4px;
-  padding: 0.5rem 0.75rem;
-  margin: 0 0 1rem;
+  border-radius: 8px;
+  color: #b91c1c;
+  font-size: 0.8125rem;
+}
+
+.export-modal-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: #f8fafc;
+  border-top: 1px solid #f1f5f9;
+}
+
+.export-primary-group {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.export-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.export-btn-cancel {
+  background: transparent;
+  color: #64748b;
+  border-color: #e2e8f0;
+}
+.export-btn-cancel:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.export-btn-safe {
+  background: #1e293b;
+  color: #fff;
+  box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.2);
+}
+.export-btn-safe:hover:not(:disabled) {
+  background: #0f172a;
+  transform: translateY(-1px);
+}
+
+.export-btn-purge {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.export-btn-purge:hover:not(:disabled) {
+  background: #b91c1c;
+  color: #fff;
 }
 
 /* Panel & Table */

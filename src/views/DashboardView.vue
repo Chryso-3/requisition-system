@@ -1,8 +1,12 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { listRequisitionsSimple, APPROVAL_WORKFLOW } from '@/services/requisitionService'
-import { REQUISITION_STATUS, USER_ROLES, USER_ROLE_LABELS } from '@/firebase/collections'
+import {
+  listRequisitionsSimple,
+  APPROVAL_WORKFLOW,
+  getRequisitionCount,
+} from '@/services/requisitionService'
+import { REQUISITION_STATUS, USER_ROLES, USER_RULE_LABELS } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -11,9 +15,11 @@ const allRequisitions = ref([])
 const loading = ref(true)
 const error = ref(null)
 
-const isApprover = computed(() => authStore.role !== USER_ROLES.REQUESTER)
-const isRequestor = computed(() => authStore.role === USER_ROLES.REQUESTER)
-const approverWorkflow = computed(() => APPROVAL_WORKFLOW[authStore.role])
+const isApprover = computed(() => authStore?.role !== USER_ROLES.REQUESTER)
+const isRequestor = computed(() => authStore?.role === USER_ROLES.REQUESTER)
+const approverWorkflow = computed(() =>
+  authStore?.role ? APPROVAL_WORKFLOW[authStore.role] : null,
+)
 
 const myRequisitions = computed(() => {
   if (!authStore.user) return []
@@ -25,22 +31,73 @@ const pendingForApproval = computed(() => {
   return allRequisitions.value.filter((r) => r.status === approverWorkflow.value.canApproveStatus)
 })
 
-const stats = computed(() => ({
-  total: isRequestor.value ? myRequisitions.value.length : allRequisitions.value.length,
-  pendingApproval: pendingForApproval.value.length,
-  pending: allRequisitions.value.filter((r) => r.status?.startsWith('pending')).length,
-  approved: allRequisitions.value.filter((r) => r.status === REQUISITION_STATUS.APPROVED).length,
-  rejected: allRequisitions.value.filter((r) => r.status === REQUISITION_STATUS.REJECTED).length,
-  myPending: myRequisitions.value.filter((r) => r.status?.startsWith('pending')).length,
-  myApproved: myRequisitions.value.filter((r) => r.status === REQUISITION_STATUS.APPROVED).length,
-  myRejected: myRequisitions.value.filter((r) => r.status === REQUISITION_STATUS.REJECTED).length,
-}))
+const stats = ref({
+  total: 0,
+  pendingApproval: 0,
+  pending: 0,
+  approved: 0,
+  rejected: 0,
+  myPending: 0,
+  myApproved: 0,
+  myRejected: 0,
+})
 
 async function load() {
   loading.value = true
   error.value = null
   try {
+    // Load first page of requisitions for the "Recent" list (if we add one) or just basic load
     allRequisitions.value = await listRequisitionsSimple()
+
+    // Fetch accurate counts from server
+    const isReq = isRequestor.value
+    const uid = authStore.user?.uid
+
+    if (isReq) {
+      const pendingStatuses = [
+        REQUISITION_STATUS.PENDING_RECOMMENDATION,
+        REQUISITION_STATUS.PENDING_INVENTORY,
+        REQUISITION_STATUS.PENDING_BUDGET,
+        REQUISITION_STATUS.PENDING_AUDIT,
+        REQUISITION_STATUS.PENDING_APPROVAL,
+      ]
+      const [total, pending, approved, rejected] = await Promise.all([
+        getRequisitionCount({ requestedBy: uid }),
+        getRequisitionCount({ requestedBy: uid, status: pendingStatuses }),
+        getRequisitionCount({ requestedBy: uid, status: REQUISITION_STATUS.APPROVED }),
+        getRequisitionCount({ requestedBy: uid, status: REQUISITION_STATUS.REJECTED }),
+      ])
+      stats.value = {
+        ...stats.value,
+        total,
+        myPending: pending,
+        myApproved: approved,
+        myRejected: rejected,
+      }
+    } else {
+      const pendingStatuses = [
+        REQUISITION_STATUS.PENDING_RECOMMENDATION,
+        REQUISITION_STATUS.PENDING_INVENTORY,
+        REQUISITION_STATUS.PENDING_BUDGET,
+        REQUISITION_STATUS.PENDING_AUDIT,
+        REQUISITION_STATUS.PENDING_APPROVAL,
+      ]
+      const workflowStatus = approverWorkflow.value?.canApproveStatus
+      const [total, pendingApp, totalPending, approved, rejected] = await Promise.all([
+        getRequisitionCount(),
+        workflowStatus ? getRequisitionCount({ status: workflowStatus }) : Promise.resolve(0),
+        getRequisitionCount({ status: pendingStatuses }),
+        getRequisitionCount({ status: REQUISITION_STATUS.APPROVED }),
+        getRequisitionCount({ status: REQUISITION_STATUS.REJECTED }),
+      ])
+      stats.value = {
+        total,
+        pendingApproval: pendingApp,
+        pending: totalPending,
+        approved,
+        rejected,
+      }
+    }
   } catch (e) {
     error.value = e.message || 'Failed to load.'
   } finally {

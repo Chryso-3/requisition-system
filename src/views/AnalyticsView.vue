@@ -58,7 +58,10 @@ const rejectedCount = computed(
 )
 
 const isGM = computed(
-  () => authStore.role === USER_ROLES.GENERAL_MANAGER || authStore.role === USER_ROLES.SUPER_ADMIN,
+  () =>
+    authStore?.role === USER_ROLES.GENERAL_MANAGER ||
+    authStore?.role === USER_ROLES.SUPER_ADMIN ||
+    authStore?.role === USER_ROLES.INTERNAL_AUDITOR,
 )
 
 function updateData() {
@@ -84,12 +87,14 @@ function updateData() {
   }
 
   // Aggregate stats from filters
-  const rangeStats = { count: 0, value: 0 }
+  const rangeStats = { count: 0, value: 0, approved: 0, rejected: 0 }
   filteredMonths.forEach((m) => {
     const bucket = summaryData.value.byMonth?.[m]
     if (bucket) {
       rangeStats.count += bucket.count || 0
       rangeStats.value += bucket.value || 0
+      rangeStats.approved += bucket.approved || 0
+      rangeStats.rejected += bucket.rejected || 0
     }
   })
 
@@ -159,14 +164,19 @@ function updateData() {
 
   data.value = {
     summary: {
-      pendingApproval: s.byStatus?.[REQUISITION_STATUS.PENDING_APPROVAL] || 0,
-      approvedThisMonth: rangeStats.count,
-      rejectedThisMonth: 0, // Need rejected in month buckets if we want this exact
-      approvedPct: arTotal > 0 ? Math.round((globalApprovedCount / arTotal) * 100) : 0,
-      rejectedPct: arTotal > 0 ? Math.round((globalRejectedCount / arTotal) * 100) : 0,
-      avgLeadTimeDays:
-        bottlenecks.find((b) => b.stage === 'submission_to_recommend')?.avgDays || '—',
-      totalApprovedValue: s.totalApprovedValue || 0,
+      pendingApproval: s.summary?.pendingApproval || 0,
+      approvedThisMonth: rangeStats.approved,
+      rejectedThisMonth: rangeStats.rejected,
+      approvedPct:
+        rangeStats.approved + rangeStats.rejected > 0
+          ? Math.round((rangeStats.approved / (rangeStats.approved + rangeStats.rejected)) * 100)
+          : 0,
+      rejectedPct:
+        rangeStats.approved + rangeStats.rejected > 0
+          ? Math.round((rangeStats.rejected / (rangeStats.approved + rangeStats.rejected)) * 100)
+          : 0,
+      avgLeadTimeDays: s.summary?.avgLeadTimeDays || '—',
+      totalApprovedValue: rangeStats.value,
     },
     pipelineWithPct,
     poPipelineWithPct,
@@ -407,7 +417,7 @@ function renderCharts() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { left: -10, right: 10, top: 4, bottom: 4 } },
+        layout: { padding: { left: 10, right: 10, top: 20, bottom: 4 } },
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -420,18 +430,21 @@ function renderCharts() {
             cornerRadius: 8,
             titleFont: { family: defaultFont, size: 12 },
             bodyFont: { family: defaultFont, size: 12 },
+            callbacks: {
+              label: (ctx) => `Volume: ${ctx.parsed.y} (${dept[ctx.dataIndex].pct}%)`,
+            },
           },
         },
         scales: {
           x: {
-            beginAtZero: true,
-            ticks: { stepSize: 1, font: { size: 11, family: defaultFont }, color: tickColor },
-            grid: { color: gridColor, drawBorder: false, tickLength: 0 },
+            ticks: { font: { size: 10, family: defaultFont }, color: tickColor },
+            grid: { display: false },
             border: { display: false },
           },
           y: {
-            ticks: { font: { size: 11, family: defaultFont }, color: tickColor },
-            grid: { display: false, drawBorder: false },
+            beginAtZero: true,
+            ticks: { stepSize: 1, font: { size: 11, family: defaultFont }, color: tickColor },
+            grid: { color: gridColor, drawBorder: false, tickLength: 0 },
             border: { display: false },
           },
         },

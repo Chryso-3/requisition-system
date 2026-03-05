@@ -29,7 +29,7 @@ let unsubscribe = null
 
 // Determine which PO_STATUS this role should see
 const pendingStatusForRole = computed(() => {
-  const r = authStore.role
+  const r = authStore?.role
   if (r === USER_ROLES.BUDGET_OFFICER) return PO_STATUS.PENDING_BUDGET
   if (r === USER_ROLES.INTERNAL_AUDITOR) return PO_STATUS.PENDING_AUDIT
   if (r === USER_ROLES.GENERAL_MANAGER) return PO_STATUS.PENDING_GM
@@ -38,7 +38,7 @@ const pendingStatusForRole = computed(() => {
 })
 
 const pageTitle = computed(() => {
-  const r = authStore.role
+  const r = authStore?.role
   if (r === USER_ROLES.BUDGET_OFFICER) return '2. PO Approval (Budget/Funds)'
   if (r === USER_ROLES.INTERNAL_AUDITOR) return '2. PO Approval (Pre-Audit)'
   if (r === USER_ROLES.GENERAL_MANAGER) return '2. PO Approval (Final)'
@@ -47,7 +47,7 @@ const pageTitle = computed(() => {
 })
 
 const pageSubtitle = computed(() => {
-  if (authStore.role === USER_ROLES.PURCHASER) {
+  if (authStore?.role === USER_ROLES.PURCHASER) {
     return 'Purchase Orders ready to be sent to the supplier.'
   }
   return 'Purchase Orders awaiting your review and approval.'
@@ -119,7 +119,7 @@ async function confirmApprovePO() {
   actionError.value = ''
   try {
     const user = authStore.user
-    const role = authStore.role
+    const role = authStore?.role
 
     const signatureData = authStore.userProfile?.signatureData
 
@@ -171,7 +171,7 @@ async function confirmRejectPO() {
   rejectError.value = ''
   try {
     const user = authStore.user
-    const role = authStore.role
+    const role = authStore?.role
     const stepMap = {
       [USER_ROLES.BUDGET_OFFICER]: 'Budget Officer',
       [USER_ROLES.INTERNAL_AUDITOR]: 'Internal Auditor',
@@ -298,7 +298,7 @@ async function confirmRejectPO() {
                       <circle cx="12" cy="12" r="3" />
                     </svg>
                   </button>
-                  <template v-if="authStore.role !== USER_ROLES.PURCHASER">
+                  <template v-if="authStore?.role !== USER_ROLES.PURCHASER">
                     <button
                       class="btn-icon-action reject"
                       title="Reject PO"

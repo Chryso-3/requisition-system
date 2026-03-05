@@ -31,8 +31,8 @@ const currentPage = ref(1)
 const tableContainer = ref(null)
 let unsubscribe = null
 
-const isPurchaser = computed(() => authStore.role === USER_ROLES.PURCHASER)
-const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
+const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
+const hasSignature = computed(() => !!authStore?.userProfile?.signatureData)
 
 const approvedRequisitions = computed(() => [...requisitions.value, ...moreRequisitions.value])
 
@@ -130,10 +130,12 @@ async function saveMarkCanvassed() {
     await markRequisitionCanvassed(modalCanvass.value.id, {
       canvassNumber: canvassNumber.value.trim() || undefined,
       canvassDate: canvassDate.value ? new Date(canvassDate.value + 'T12:00:00') : new Date(),
-      canvassBy: user ? { userId: user.uid, name: authStore.displayName, email: user.email } : null,
+      canvassBy: user
+        ? { userId: user?.uid, name: authStore?.displayName, email: user?.email }
+        : null,
       supplier: supplier.value.trim() || undefined,
       items: canvassItems.value,
-      signatureData: authStore.userProfile?.signatureData,
+      signatureData: authStore?.userProfile?.signatureData,
     })
     closeCanvassModal()
   } catch (e) {
@@ -169,7 +171,7 @@ async function loadMore() {
 onMounted(() => {
   loading.value = true
   error.value = null
-  if (!authStore.user) {
+  if (!authStore?.user) {
     loading.value = false
     return
   }

@@ -1,15 +1,18 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
   subscribeRequisitions,
   forceAdvanceStep,
   voidRequisition,
   getRequisitionCurrentStep,
   clearAllTestingData,
+  getRequisitionCount,
+  REQUISITION_PAGE_SIZE,
 } from '@/services/requisitionService'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
 import { REQUISITION_STATUS, USER_ROLE_LABELS, USER_ROLES } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
+import PaginationComponent from '@/components/PaginationComponent.vue'
 import {
   Search,
   Filter,
@@ -31,6 +34,14 @@ const loading = ref(true)
 const searchQuery = ref('')
 const statusFilter = ref('all')
 const processingId = ref(null)
+let unsubscribe = null
+
+// Pagination State
+const currentPage = ref(1)
+const totalItems = ref(0)
+const pageSize = ref(REQUISITION_PAGE_SIZE)
+const totalPages = computed(() => Math.ceil(totalItems.value / pageSize.value) || 1)
+const lastDocs = ref([]) // To keep track of cursors for each page
 
 const statusFilterOptions = computed(() => {
   const workflowOrder = [
@@ -101,6 +112,11 @@ function openOverrideModal(req, action) {
 }
 
 async function handleOverride() {
+  if (!selectedReq.value) {
+    alert('No requisition selected.')
+    return
+  }
+
   if (!overrideReason.value.trim()) {
     alert('Please provide a reason for the override.')
     return
@@ -115,9 +131,9 @@ async function handleOverride() {
 
   try {
     if (action === 'advance') {
-      await forceAdvanceStep(reqId, authStore.user, reason)
+      await forceAdvanceStep(reqId, authStore?.user, reason)
     } else if (action === 'void') {
-      await voidRequisition(reqId, authStore.user, reason)
+      await voidRequisition(reqId, authStore?.user, reason)
     }
   } catch (err) {
     console.error('Override failed:', err)
@@ -132,6 +148,9 @@ async function handleResetDatabase() {
     resetStep.value = 2
     isResetting.value = true
     try {
+      if (!authStore?.userProfile) {
+        throw new Error('User profile not initialized. Please refresh the page.')
+      }
       const count = await clearAllTestingData(authStore.userProfile)
       resetCount.value = count
       resetStep.value = 3
@@ -149,20 +168,62 @@ async function handleResetDatabase() {
   }
 }
 
-let unsubscribe = null
-onMounted(() => {
+async function refreshData() {
   loading.value = true
-  unsubscribe = subscribeRequisitions(
-    {}, // No hard filters, we filter client-side for admin view
-    (data) => {
-      requisitions.value = data
-      loading.value = false
-    },
-    (err) => {
-      console.error('Error fetching requisitions:', err)
-      loading.value = false
-    },
-  )
+  try {
+    const filters = {}
+    if (statusFilter.value !== 'all') filters.status = statusFilter.value
+
+    // Get total count for pagination
+    totalItems.value = await getRequisitionCount(filters)
+
+    // Current simple approach for Admin: Page 1 is realtime, others can be static or navigated.
+    // However, to keep it simple and consistent with the elite UI, we'll use listRequisitions for paginated jumps.
+    // Actually, let's stick to the subscription for the visible page if we want to stay "live".
+    if (unsubscribe) unsubscribe()
+
+    // Page-to-cursor logic for Firestore
+    const startAfter = currentPage.value > 1 ? lastDocs.value[currentPage.value - 2] : null
+
+    unsubscribe = subscribeRequisitions(
+      filters,
+      (data, lastDoc) => {
+        requisitions.value = data
+        if (lastDoc) {
+          lastDocs.value[currentPage.value - 1] = lastDoc
+        }
+        loading.value = false
+      },
+      (err) => {
+        console.error('Error fetching requisitions:', err)
+        loading.value = false
+      },
+      { pageSize: pageSize.value, startAfter },
+    )
+  } catch (err) {
+    console.error('Failed to refresh data:', err)
+    loading.value = false
+  }
+}
+
+function handlePageChange(p) {
+  currentPage.value = p
+  refreshData()
+}
+
+// Re-fetch on filter change
+watch([statusFilter], () => {
+  currentPage.value = 1
+  lastDocs.value = []
+  refreshData()
+})
+
+onMounted(() => {
+  refreshData()
+})
+
+onUnmounted(() => {
+  if (unsubscribe) unsubscribe()
 })
 
 function getStatusLabel(status) {
@@ -204,7 +265,7 @@ function formatDate(date) {
       </div>
       <div class="header-actions">
         <button
-          v-if="authStore.role === USER_ROLES.SUPER_ADMIN"
+          v-if="authStore?.role === USER_ROLES.SUPER_ADMIN"
           @click="showResetModal = true"
           class="btn-reset-db"
           title="Reset Database for Testing"
@@ -329,6 +390,16 @@ function formatDate(date) {
           <FileText :size="48" />
           <p>No requisitions found matching your criteria.</p>
         </div>
+
+        <PaginationComponent
+          v-if="!loading && totalItems > 0"
+          :current-page="currentPage"
+          :total-pages="totalPages"
+          :page-size="pageSize"
+          :total-items="totalItems"
+          :loading="loading"
+          @page-change="handlePageChange"
+        />
       </div>
     </div>
 

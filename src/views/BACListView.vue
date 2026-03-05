@@ -31,8 +31,8 @@ const currentPage = ref(1)
 const tableContainer = ref(null)
 let unsubscribe = null
 
-const isBACSecretary = computed(() => authStore.role === USER_ROLES.BAC_SECRETARY)
-const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
+const isBACSecretary = computed(() => authStore?.role === USER_ROLES.BAC_SECRETARY)
+const hasSignature = computed(() => !!authStore?.userProfile?.signatureData)
 
 const submittedRequisitions = computed(() => [...requisitions.value, ...moreRequisitions.value])
 
@@ -121,7 +121,7 @@ async function saveIssuePO() {
   actionLoading.value = true
   actionError.value = ''
   try {
-    const user = authStore.user
+    const user = authStore?.user
     await markRequisitionOrdered(modalPO.value.id, {
       poNumber: poNumber.value.trim(),
       supplier: supplier.value.trim(),
@@ -129,13 +129,13 @@ async function saveIssuePO() {
       orderedAt: orderedAt.value ? new Date(orderedAt.value + 'T12:00:00') : new Date(),
       orderedBy: user
         ? {
-            userId: user.uid,
-            name: authStore.displayName,
-            email: user.email,
-            role: authStore.role,
+            userId: user?.uid,
+            name: authStore?.displayName,
+            email: user?.email,
+            role: authStore?.role,
           }
         : null,
-      signatureData: authStore.userProfile?.signatureData,
+      signatureData: authStore?.userProfile?.signatureData,
     })
     closePOModal()
   } catch (e) {
@@ -175,7 +175,7 @@ async function loadMore() {
 onMounted(() => {
   loading.value = true
   error.value = null
-  if (!authStore.user) {
+  if (!authStore?.user) {
     loading.value = false
     return
   }
@@ -183,7 +183,7 @@ onMounted(() => {
     {
       status: REQUISITION_STATUS.APPROVED,
       canvassStatus: CANVASS_STATUS.SUBMITTED_TO_BAC,
-      poStatus: [null, PO_STATUS.REJECTED],
+      poStatus: [null],
     },
     (results, lastDocSnapshot) => {
       requisitions.value = results
@@ -284,13 +284,6 @@ onUnmounted(() => {
                     <td>
                       <div class="flex items-center gap-2">
                         <span>{{ r.canvassNumber || '—' }}</span>
-                        <span
-                          v-if="r.poStatus === PO_STATUS.REJECTED"
-                          class="badge badge-error"
-                          title="Returned for correction"
-                        >
-                          Rejected
-                        </span>
                       </div>
                     </td>
                     <td>{{ formatDate(r.submittedToBACAt) }}</td>
@@ -362,18 +355,6 @@ onUnmounted(() => {
           <!-- Body -->
           <div class="po-modal-body">
             <div v-if="actionError" class="po-alert">{{ actionError }}</div>
-
-            <!-- Rejection Remarks Alert -->
-            <div
-              v-if="modalPO.poStatus === PO_STATUS.REJECTED && modalPO.poRejectionRemarks"
-              class="po-rejection-alert"
-            >
-              <div class="alert-icon">⚠️</div>
-              <div class="alert-content">
-                <strong>Returned for Correction:</strong>
-                <p>{{ modalPO.poRejectionRemarks }}</p>
-              </div>
-            </div>
 
             <div class="po-grid-2">
               <div class="po-field">

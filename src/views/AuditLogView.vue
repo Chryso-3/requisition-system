@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -44,13 +44,14 @@ const statusLabel = {
 // Logs are view-only for both Internal Auditor and General Manager
 const canViewLogs = computed(
   () =>
-    authStore.role === USER_ROLES.INTERNAL_AUDITOR ||
-    authStore.role === USER_ROLES.GENERAL_MANAGER ||
-    authStore.role === USER_ROLES.SUPER_ADMIN,
+    authStore?.role === USER_ROLES.INTERNAL_AUDITOR ||
+    authStore?.role === USER_ROLES.GENERAL_MANAGER ||
+    authStore?.role === USER_ROLES.SUPER_ADMIN,
 )
 // Download (CSV) and delete-from-database is Internal Auditor only
 const canDownloadAndDeleteLog = computed(
-  () => authStore.role === USER_ROLES.INTERNAL_AUDITOR || authStore.role === USER_ROLES.SUPER_ADMIN,
+  () =>
+    authStore?.role === USER_ROLES.INTERNAL_AUDITOR || authStore?.role === USER_ROLES.SUPER_ADMIN,
 )
 
 // Action filter: show all | approver actions | purchaser actions
@@ -280,23 +281,74 @@ function getDateLabel(date) {
 
 // Journey Trail Helpers
 function getJourneyTrail(journey) {
-  const status = journey.entries[0]?.statusAfter || 'draft'
+  // 1. Determine the absolute "Truth" status for this journey
+  const reqId = journey.requisitionId
+  const rMapStatus = (requisitionStatusMap.value[reqId]?.status || '').toLowerCase()
+
+  // Also scan all entries in this journey; if ANY were approved, it's at least approved
+  const anyApprovedInHistory = journey.entries.some((e) => {
+    const action = (e.action || '').toLowerCase()
+    const status = (e.statusAfter || '').toLowerCase()
+    return action === 'approved' || status === 'approved' || action === 'po_approved'
+  })
+
+  // Final determination: map status takes precedence, then history scan, then latest entry
+  const globalStatus =
+    rMapStatus ||
+    (anyApprovedInHistory ? 'approved' : (journey.entries[0]?.statusAfter || 'draft').toLowerCase())
+
   const steps = [
     { label: 'Dept', status: 'pending_recommendation' },
     { label: 'Whse', status: 'pending_inventory' },
     { label: 'Budget', status: 'pending_budget' },
     { label: 'Audit', status: 'pending_audit' },
     { label: 'GM', status: 'pending_approval' },
-    { label: 'Approved', status: 'approved' },
   ]
 
-  const currentIndex = steps.findIndex((s) => s.status === status)
-  return steps.map((s, idx) => ({
-    ...s,
-    active: idx === currentIndex,
-    done: idx < currentIndex || status === 'approved',
-    failed: status === 'rejected' && idx === currentIndex,
-  }))
+  const statusMap = {
+    draft: -1,
+    pending_recommendation: 0,
+    pending_inventory: 1,
+    pending_budget: 2,
+    pending_audit: 3,
+    pending_approval: 4,
+    approved: 5,
+    rejected: 99,
+  }
+
+  const currentIndex = statusMap[globalStatus] ?? -1
+
+  return steps.map((s, idx) => {
+    // Persistent Green: If global status is approved, all these 5 steps are green
+    let isDone = idx < currentIndex || globalStatus === 'approved'
+    // Persistent Active: Only show if not fully approved
+    let isActive = globalStatus !== 'approved' && idx === currentIndex
+    let isFailed = false
+
+    if (globalStatus === 'rejected') {
+      const rejectedEntry = journey.entries.find((e) => {
+        const a = (e.action || '').toLowerCase()
+        return a === 'declined' || a === 'rejected' || a === 'po_rejected'
+      })
+      const rejectedAt = rejectedEntry?.step || ''
+      const stepIndex = steps.findIndex(
+        (step) =>
+          step.status.includes(rejectedAt) ||
+          rejectedAt.includes(step.label.toLowerCase()) ||
+          (rejectedAt === 'purchaser' && idx === 4), // Fails after GM
+      )
+
+      if (idx === stepIndex) isFailed = true
+      if (idx < stepIndex) isDone = true
+    }
+
+    return {
+      ...s,
+      active: isActive,
+      done: isDone,
+      failed: isFailed,
+    }
+  })
 }
 
 function timeSince(date, relativeTo) {
@@ -454,7 +506,7 @@ function buildAndDownloadLogCsv(entries) {
   const rows = entries.map((e) => {
     const from = statusText(e.statusBefore)
     const to = statusText(e.statusAfter)
-    const statusChange = `${from} â†’ ${to}`
+    const statusChange = `${from} -> ${to}`
     const purchase =
       (
         e.purchaseStatus ||
@@ -477,7 +529,7 @@ function buildAndDownloadLogCsv(entries) {
   })
   const header = cols.map(csvEscape).join(',')
   const lines = rows.map((row) => row.map(csvEscape).join(','))
-  const csv = `\uFEFF${header}\n${lines.join('\n')}\n`
+  const csv = `\uFEFF${header}\n\n${lines.join('\n')}\n`
   const scopeSlug = downloadScopeLabel.value.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '')
   const filename = `transaction_log_${scopeSlug || 'export'}_${new Date().toISOString().slice(0, 10)}.csv`
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -504,25 +556,69 @@ function closeDownloadConfirmModal() {
   }
 }
 
+/**
+ * Downloads the CSV only. Does NOT delete any records.
+ */
+function executeDownloadOnly() {
+  if (totalEntries.value === 0) return
+  const entries = filteredLogEntries.value
+  buildAndDownloadLogCsv(entries)
+  closeDownloadConfirmModal()
+}
+
+/**
+ * Downloads the CSV and purges ONLY records older than 30 days.
+ */
 async function executeDownloadThenDeleteLogs() {
   if (!canDownloadAndDeleteLog.value) return
   const entries = filteredLogEntries.value
   const withIds = entries.filter((e) => e.id)
+
   if (!withIds.length) {
     closeDownloadConfirmModal()
     return
   }
+
+  // 30-Day Retention Filter
+  const thirtyDaysAgo = new Date()
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+  const purgeableEntries = withIds.filter((e) => {
+    if (!e.signedAt) return false
+    const d = e.signedAt?.toDate ? e.signedAt.toDate() : new Date(e.signedAt)
+    return d < thirtyDaysAgo
+  })
+
+  // We ALWAYS download the full current view
   deletingLogs.value = true
   downloadLogError.value = null
   try {
-    buildAndDownloadLogCsv(entries)
-    const idsToRemove = new Set(withIds.map((e) => e.id))
-    for (const e of withIds) {
+    buildAndDownloadLogCsv(entries) // Download all visible
+
+    if (purgeableEntries.length === 0) {
+      // Nothing old enough to delete
+      downloadLogError.value = 'Data exported. No records older than 30 days were found to purge.'
+      // Leave modal open to show this message, user can click close
+      deletingLogs.value = false
+      return
+    }
+
+    // Clear current selection and UI state before starting deletions
+    const idsToRemove = new Set(purgeableEntries.map((e) => e.id))
+    const journeyIdsToRemove = new Set(purgeableEntries.map((e) => e.requisitionId).filter(Boolean))
+
+    for (const e of purgeableEntries) {
       await deleteTransactionLogEntry(e.id)
     }
+
+    // Update local state IMMEDIATELY after all deletions succeed
     logEntries.value = logEntries.value.filter((e) => !idsToRemove.has(e.id))
-    closeDownloadConfirmModal()
+    // Clear expanded rows for these journeys so they don't linger
+    expandedRows.value = expandedRows.value.filter((id) => !journeyIdsToRemove.has(id))
+
+    // Close on success
     showDownloadConfirmModal.value = false
+    downloadLogError.value = null
   } catch (e) {
     downloadLogError.value = e?.message || 'Failed to delete log entries.'
   } finally {
@@ -542,6 +638,10 @@ function toggleExpand(key) {
 
 // Purchase/action badge helpers
 function badgeKey(entry) {
+  const action = (entry.action || '').toLowerCase()
+  if (action === 'po_rejected') return 'declined'
+  if (action === 'po_approved') return 'approved'
+
   const ps = (
     entry.purchaseStatus ||
     requisitionStatusMap.value[entry.requisitionId]?.purchaseStatus ||
@@ -551,7 +651,6 @@ function badgeKey(entry) {
   if (ps === 'approved') return 'approved'
   if (ps === 'declined' || ps === 'rejected') return 'declined'
 
-  const action = (entry.action || '').toLowerCase()
   if (
     action === 'approved' ||
     action === 'ordered' ||
@@ -564,23 +663,26 @@ function badgeKey(entry) {
 }
 
 function badgeText(entry) {
+  // Priority 1: Specific action taken in this log entry
+  const action = (entry.action || '').toLowerCase()
+  if (action) {
+    if (action === 'po_rejected') return 'PO Rejected'
+    if (action === 'approved' || action === 'po_approved') return 'Approved'
+    if (action === 'declined' || action === 'rejected') return 'Declined'
+    if (action === 'ordered' || action === 'po_issued') return 'Ordered'
+    if (action === 'received') return 'Received'
+    if (action === 'canvassed') return 'Canvassed'
+    if (action === 'submitted_to_bac') return 'To BAC'
+    if (action === 'force_advance') return 'Overridden'
+    return action.charAt(0).toUpperCase() + action.slice(1)
+  }
+
+  // Priority 2: Fallback to global purchaseStatus only if no specific action
   const ps =
     entry.purchaseStatus || requisitionStatusMap.value[entry.requisitionId]?.purchaseStatus || ''
   if (ps) return ps.charAt(0).toUpperCase() + ps.slice(1)
-  if ((entry.step === 'purchaser' || entry.step === 'purchase_order') && entry.action) {
-    if (entry.action === 'ordered') return 'Ordered'
-    if (entry.action === 'po_issued') return 'PO Issued'
-    if (entry.action === 'received') return 'Received'
-    if (entry.action === 'approved') return 'Approved'
-    return entry.action.charAt(0).toUpperCase() + entry.action.slice(1)
-  }
-  if (entry.action) {
-    if (entry.action === 'approved') return 'Approved'
-    if (entry.action === 'declined' || entry.action === 'rejected') return 'Declined'
-    if (entry.action === 'po_issued') return 'PO Issued'
-    return entry.action.charAt(0).toUpperCase() + entry.action.slice(1)
-  }
-  return 'â€”'
+
+  return '—'
 }
 
 /** One plain-language sentence: what happened in this log entry */
@@ -606,13 +708,18 @@ function whatHappened(entry) {
   }
 
   if (action === 'po_approved') {
-    if (step === 'po_budget') return 'PO Funds Certified'
-    if (step === 'po_audit') return 'PO Pre-Audited'
-    if (step === 'po_gm') return 'PO GM Approved'
+    if (step === 'po_budget' || step === 'budget officer') return 'PO Funds Certified'
+    if (step === 'po_audit' || step === 'internal auditor') return 'PO Pre-Audited'
+    if (step === 'po_gm' || step === 'general manager') return 'PO GM Approved'
     return 'PO Approved'
   }
 
-  if (action === 'po_rejected') return 'Purchase Order Rejected'
+  if (action === 'po_rejected') {
+    if (step === 'po_budget' || step === 'budget officer') return 'PO Rejected — Budget Step'
+    if (step === 'po_audit' || step === 'internal auditor') return 'PO Rejected — Audit Step'
+    if (step === 'po_gm' || step === 'general manager') return 'PO Rejected — GM Final Review'
+    return 'Purchase Order Rejected'
+  }
 
   if (action === 'approved') {
     if (statusTo === REQUISITION_STATUS.APPROVED.toLowerCase()) return 'Requisition Fully Approved'
@@ -623,6 +730,8 @@ function whatHappened(entry) {
 
   if (action === 'ordered') return 'Purchase Order Issued'
   if (action === 'received') return 'Items Received & Logged'
+
+  if (action === 'force_advance') return '[ADMIN OVERRIDE] Stage Passed'
 
   return 'Workflow Stage Updated'
 }
@@ -636,6 +745,7 @@ async function updateRequisitionStatusMap() {
   toFetch.forEach((id, i) => {
     const r = results[i]
     requisitionStatusMap.value[id] = {
+      status: r?.status ?? '',
       purchaseStatus: r?.purchaseStatus ?? '',
       poNumber: r?.poNumber ?? '',
     }
@@ -769,62 +879,14 @@ onMounted(load)
 
           <div v-else class="table-section" ref="tableContainer">
             <div class="table-container">
-              <div
-                v-if="showLogCustomRange"
-                class="log-modal-overlay"
-                @click.self="closeLogCustomRange"
-              >
-                <div class="log-modal-card">
-                  <h3 class="log-modal-title">Custom Date Range</h3>
-                  <div class="log-modal-fields">
-                    <label><span>From</span><input v-model="draftLogStart" type="date" /></label>
-                    <label><span>To</span><input v-model="draftLogEnd" type="date" /></label>
-                  </div>
-                  <div class="log-modal-actions">
-                    <button type="button" class="btn-cancel" @click="closeLogCustomRange">
-                      Cancel
-                    </button>
-                    <button type="button" class="btn-primary" @click="applyLogCustomRange">
-                      Apply
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Download Modal -->
-              <div
-                v-if="showDownloadConfirmModal"
-                class="log-modal-overlay"
-                @click.self="closeDownloadConfirmModal"
-              >
-                <div class="log-modal-card">
-                  <h3 class="log-modal-title">Export Log</h3>
-                  <p class="log-modal-desc">
-                    Exporting {{ totalEntries }} entries in current view.
-                  </p>
-                  <div class="log-modal-actions">
-                    <button type="button" class="btn-cancel" @click="closeDownloadConfirmModal">
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      class="btn-primary"
-                      @click="executeDownloadThenDeleteLogs"
-                    >
-                      Export & Delete
-                    </button>
-                  </div>
-                </div>
-              </div>
-
               <table class="data-table">
                 <thead>
                   <tr class="glass-header">
                     <th style="width: 140px">RF Number</th>
-                    <th style="width: 200px">Latest Action</th>
-                    <th>Purpose</th>
-                    <th style="width: 250px">Workflow Progress</th>
-                    <th style="width: 140px; text-align: right">Date & Time</th>
+                    <th style="width: 180px">Latest Action</th>
+                    <th class="purpose-header" style="text-align: left">Purpose</th>
+                    <th style="width: 220px; text-align: center">Workflow Progress</th>
+                    <th style="width: 160px; text-align: right">Date & Time</th>
                     <th style="width: 50px"></th>
                   </tr>
                 </thead>
@@ -839,16 +901,24 @@ onMounted(load)
                       @click="toggleExpand(journey.requisitionId)"
                     >
                       <td class="rf-cell" @click.stop="goToDetail(journey.requisitionId)">
-                        {{ journey.rfControlNo }}
-                        <span class="velocity-tag" v-if="getVelocity(journey)"
+                        <span class="rf-number">{{ journey.rfControlNo }}</span>
+                        <span
+                          class="velocity-tag"
+                          v-if="getVelocity(journey) && getVelocity(journey) !== 'Processing'"
                           >{{ getVelocity(journey).split(' ')[0] }}d</span
+                        >
+                        <span
+                          class="velocity-tag processing"
+                          v-else-if="getVelocity(journey) === 'Processing'"
+                          >Today</span
                         >
                       </td>
                       <td class="action-cell">
-                        <span class="status-dot" :class="badgeKey(journey.entries[0])"></span>
-                        {{ whatHappened(journey.entries[0]) }}
+                        <span class="badge-pill" :class="badgeKey(journey.entries[0])">
+                          {{ badgeText(journey.entries[0]) }}
+                        </span>
                       </td>
-                      <td class="purpose-cell">{{ journey.purpose }}</td>
+                      <td class="purpose-cell">{{ journey.purpose || '—' }}</td>
                       <td class="trail-cell">
                         <div class="mini-trail">
                           <div
@@ -876,22 +946,31 @@ onMounted(load)
                       <td colspan="6" class="history-cell">
                         <div class="compact-history">
                           <table class="sub-table">
-                            <tr v-for="entry in journey.entries" :key="entry.displayKey">
+                            <tr
+                              v-for="entry in journey.entries"
+                              :key="entry.displayKey"
+                              :class="{
+                                'override-entry':
+                                  (entry.action || '').toLowerCase() === 'force_advance',
+                              }"
+                            >
                               <td style="width: 20px">
                                 <div class="history-dot" :class="badgeKey(entry)"></div>
                               </td>
-                              <td style="width: 150px">
-                                <strong>{{ entry.name }}</strong>
+                              <td style="width: 140px">
+                                <div class="user-name">{{ entry.name }}</div>
                               </td>
-                              <td style="width: 150px" class="muted">
+                              <td style="width: 150px" class="muted role-cell">
                                 {{ stepLabel(entry) }}
                               </td>
-                              <td style="width: 120px" class="action-text" :class="badgeKey(entry)">
-                                {{ badgeText(entry) }}
+                              <td style="width: 110px" class="action-text-cell">
+                                <span class="badge-pill" :class="badgeKey(entry)">
+                                  {{ badgeText(entry) }}
+                                </span>
                               </td>
                               <td class="remarks-text">{{ entry.remarks || '-' }}</td>
-                              <td style="width: 100px; text-align: right" class="muted">
-                                {{ timeSince(entry.signedAt) }} ago
+                              <td style="width: 90px; text-align: right" class="muted time-ago">
+                                {{ timeSince(entry.signedAt) }}
                               </td>
                             </tr>
                           </table>
@@ -919,6 +998,109 @@ onMounted(load)
         </div>
       </div>
     </template>
+
+    <!-- Modals moved to top-level to avoid layering bugs with backdrop-filter -->
+    <div v-if="showLogCustomRange" class="log-modal-overlay" @click.self="closeLogCustomRange">
+      <div class="log-modal-card">
+        <h3 class="log-modal-title">Custom Date Range</h3>
+        <div class="log-modal-fields">
+          <label><span>From</span><input v-model="draftLogStart" type="date" /></label>
+          <label><span>To</span><input v-model="draftLogEnd" type="date" /></label>
+        </div>
+        <div class="log-modal-actions">
+          <button type="button" class="btn-cancel" @click="closeLogCustomRange">Cancel</button>
+          <button type="button" class="btn-primary" @click="applyLogCustomRange">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Premium Export Modal -->
+    <Transition name="modal-fade">
+      <div
+        v-if="showDownloadConfirmModal"
+        class="export-modal-overlay premium-glass"
+        @click.self="closeDownloadConfirmModal"
+      >
+        <div
+          class="export-modal-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="export-modal-title"
+        >
+          <div class="export-modal-header">
+            <div class="export-icon-box">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" x2="12" y1="15" y2="3" />
+              </svg>
+            </div>
+            <div>
+              <h2 id="export-modal-title" class="export-modal-title">Export Log</h2>
+              <p class="export-modal-subtitle">
+                Exporting <strong>{{ totalEntries }}</strong> entries in current view.
+              </p>
+            </div>
+          </div>
+
+          <div class="export-modal-body">
+            <div class="retention-policy-box">
+              <div class="policy-header">
+                <span class="policy-icon">ℹ️</span>
+                <strong>Retention Policy</strong>
+              </div>
+              <p class="policy-text">
+                You can download your logs safely without deleting them. If you choose to Purge, the
+                system will export your data but only permanently delete records older than
+                <strong style="color: #b91c1c">30 days</strong> to maintain fast database speeds.
+              </p>
+            </div>
+            <p v-if="downloadLogError" class="export-error">{{ downloadLogError }}</p>
+          </div>
+
+          <div class="export-modal-actions">
+            <button
+              type="button"
+              class="export-btn export-btn-cancel"
+              :disabled="deletingLogs"
+              @click="closeDownloadConfirmModal"
+            >
+              Cancel
+            </button>
+            <div class="export-primary-group">
+              <button
+                type="button"
+                class="export-btn export-btn-safe"
+                :disabled="deletingLogs"
+                @click="executeDownloadOnly"
+              >
+                {{ deletingLogs ? 'Downloading...' : 'Download CSV' }}
+              </button>
+              <button
+                v-if="canDownloadAndDeleteLog"
+                type="button"
+                class="export-btn export-btn-purge"
+                :disabled="deletingLogs"
+                @click="executeDownloadThenDeleteLogs"
+                title="Only deletes records older than 30 days"
+              >
+                {{ deletingLogs ? 'Purging...' : 'Export & Purge (30+ Days)' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -1142,8 +1324,7 @@ onMounted(load)
   top: 0;
   z-index: 20;
   background: rgba(249, 250, 251, 0.9);
-  backdrop-filter: blur(8px);
-  padding: 0.875rem 1rem;
+  padding: 1rem 1.25rem;
   text-align: left;
   font-size: 0.75rem;
   font-weight: 700;
@@ -1172,7 +1353,7 @@ onMounted(load)
 }
 
 .journey-row td {
-  padding: 0.75rem 1rem;
+  padding: 1rem 1.25rem;
   border-bottom: 1px solid #f3f4f6;
   vertical-align: middle;
 }
@@ -1189,51 +1370,66 @@ onMounted(load)
 .rf-cell {
   font-family: 'JetBrains Mono', monospace;
   font-weight: 700;
-  color: var(--jinja-accent);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+
+.rf-number {
+  color: var(--jinja-accent);
+  min-width: 110px;
 }
 
 .velocity-tag {
   font-size: 0.65rem;
-  background: #ecfdf5;
-  color: #059669;
+  background: #f1f5f9;
+  color: #64748b;
   padding: 2px 6px;
   border-radius: 4px;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.action-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  color: #374151;
+.velocity-tag.processing {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.purpose-header {
+  min-width: 200px;
 }
 
 .purpose-cell {
   color: #6b7280;
-  max-width: 250px;
+  max-width: 300px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 /* Mini Trail */
+.trail-cell {
+  text-align: center;
+}
+
 .mini-trail {
   display: flex;
   gap: 4px;
+  justify-content: center;
 }
 
 .mini-step {
   height: 6px;
-  width: 24px;
-  background: #e5e7eb;
+  width: 32px;
+  background: #cbd5e1; /* Even darker off-state for high-fidelity visibility */
   border-radius: 3px;
+  transition: all 0.3s ease;
 }
 
 .mini-step.done {
   background: #10b981;
+  box-shadow: 0 1px 2px rgba(16, 185, 129, 0.2);
 }
 
 .mini-step.active {
@@ -1243,12 +1439,14 @@ onMounted(load)
 
 .mini-step.failed {
   background: #ef4444;
+  box-shadow: 0 1px 2px rgba(239, 68, 68, 0.2);
 }
 
 .time-cell {
   text-align: right;
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: #94a3b8;
+  white-space: nowrap;
 }
 
 .time-cell-date {
@@ -1323,57 +1521,63 @@ onMounted(load)
 }
 
 .sub-table td {
-  padding: 0.5rem 0.75rem;
+  padding: 0.35rem 0.75rem;
   border-bottom: 1px solid #f1f5f9;
 }
 
-.history-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #d1d5db;
-}
-
-.history-dot.approved {
-  background: #10b981;
-}
-.history-dot.ordered {
-  background: #3b82f6;
-}
-.history-dot.received {
-  background: #8b5cf6;
-}
-.history-dot.declined {
-  background: #ef4444;
-}
-
-.action-text {
+.user-name {
   font-weight: 700;
   font-size: 0.8125rem;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
 }
 
-.action-text.approved {
-  color: #10b981;
-}
-.action-text.ordered {
-  color: #3b82f6;
-}
-.action-text.received {
-  color: #8b5cf6;
-}
-.action-text.declined {
-  color: #ef4444;
-}
-
-.remarks-text {
-  font-size: 0.8125rem;
+.badge-pill {
+  display: inline-block;
+  font-size: 0.625rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  background: #f1f5f9;
   color: #64748b;
-  font-style: italic;
+  letter-spacing: 0.025em;
+}
+
+.badge-pill.approved {
+  background: #ecfdf5;
+  color: #059669;
+}
+.badge-pill.ordered {
+  background: #eff6ff;
+  color: #2563eb;
+}
+.badge-pill.received {
+  background: #f5f3ff;
+  color: #7c3aed;
+}
+.badge-pill.declined {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.override-entry {
+  background: #fffbeb;
+}
+
+.role-cell {
+  font-size: 0.7rem;
+}
+
+.time-ago {
+  font-size: 0.7rem;
 }
 
 .muted {
   color: #94a3b8;
-  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -1637,6 +1841,29 @@ onMounted(load)
   animation: spin 0.8s linear infinite;
 }
 
+.spinner.small {
+  width: 20px;
+  height: 20px;
+  border-width: 2px;
+}
+
+.modal-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 1rem;
+  font-size: 0.875rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.error-message.mini {
+  margin: 0 0 1rem 0;
+  padding: 0.75rem;
+  font-size: 0.8rem;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -1663,5 +1890,175 @@ onMounted(load)
   font-weight: 700;
   border: 1px solid #fee2e2;
   margin: 2rem;
+}
+/* ==============================
+   PREMIUM EXPORT MODAL STYLES
+   ============================== */
+.export-modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.export-modal-card {
+  background: linear-gradient(to bottom, #ffffff, #f8fafc);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 520px;
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(226, 232, 240, 0.5);
+  overflow: hidden;
+  animation: modal-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modal-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.export-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.5rem 1.5rem 0.5rem;
+}
+
+.export-icon-box {
+  background: #f1f5f9;
+  color: #1e293b;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.8);
+  border: 1px solid #e2e8f0;
+}
+
+.export-modal-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+}
+
+.export-modal-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.875rem;
+  color: #64748b;
+}
+
+.export-modal-body {
+  padding: 1rem 1.5rem;
+}
+
+.retention-policy-box {
+  background: rgba(241, 245, 249, 0.7);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+
+.policy-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  color: #1e293b;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.policy-text {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.export-error {
+  margin: 1rem 0 0;
+  padding: 0.75rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #b91c1c;
+  font-size: 0.8125rem;
+}
+
+.export-modal-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: #f8fafc;
+  border-top: 1px solid #f1f5f9;
+}
+
+.export-primary-group {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.export-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.export-btn-cancel {
+  background: transparent;
+  color: #64748b;
+  border-color: #e2e8f0;
+}
+.export-btn-cancel:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.export-btn-safe {
+  background: #1e293b;
+  color: #fff;
+  box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.2);
+}
+.export-btn-safe:hover:not(:disabled) {
+  background: #0f172a;
+  transform: translateY(-1px);
+}
+
+.export-btn-purge {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.export-btn-purge:hover:not(:disabled) {
+  background: #b91c1c;
+  color: #fff;
 }
 </style>

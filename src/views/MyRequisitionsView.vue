@@ -54,14 +54,14 @@ const statusLabel = {
   [REQUISITION_STATUS.REJECTED]: 'Rejected',
 }
 
-const isGM = computed(() => authStore.role === USER_ROLES.GENERAL_MANAGER)
+const isGM = computed(() => authStore?.role === USER_ROLES.GENERAL_MANAGER)
 
 const combinedRequisitions = computed(() => [...requisitions.value, ...moreRequisitions.value])
 
 const myRequisitions = computed(() => {
-  if (!authStore.user) return []
+  if (!authStore?.user) return []
   if (isGM.value) return combinedRequisitions.value
-  return combinedRequisitions.value.filter((r) => r.requestedBy?.userId === authStore.user.uid)
+  return combinedRequisitions.value.filter((r) => r.requestedBy?.userId === authStore?.user?.uid)
 })
 
 const filteredRequisitions = computed(() => {
@@ -146,9 +146,9 @@ const stats = computed(() => {
 })
 
 async function refreshUserStats() {
-  if (isGM.value || !authStore.user) return
+  if (isGM.value || !authStore?.user) return
   try {
-    const data = await getUserRequisitionStats(authStore.user.uid)
+    const data = await getUserRequisitionStats(authStore?.user?.uid)
     if (data) userStats.value = data
   } catch (e) {
     console.warn('Failed to fetch user stats:', e)
@@ -201,7 +201,7 @@ function startRealtime() {
   lastDoc.value = null
   hasMore.value = false
 
-  const filters = isGM.value ? {} : { requestedBy: authStore.user.uid }
+  const filters = isGM.value ? {} : { requestedBy: authStore?.user?.uid }
   if (filterStatus.value) {
     if (filterStatus.value === 'received') {
       filters.purchaseStatus = 'received'
@@ -236,7 +236,7 @@ async function loadMore() {
   if (!lastDoc.value || loadingMore.value || !hasMore.value) return
   loadingMore.value = true
   try {
-    const filters = isGM.value ? {} : { requestedBy: authStore.user.uid }
+    const filters = isGM.value ? {} : { requestedBy: authStore?.user?.uid }
     if (filterStatus.value) {
       if (filterStatus.value === 'received') {
         filters.purchaseStatus = 'received'

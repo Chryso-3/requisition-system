@@ -6,18 +6,20 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+build_error.txt
 
-node_modules
-.DS_Store
-dist
-dist-ssr
-coverage
-*.local
+# Personal / Security Flagged Files
 .env
 .env.local
 .env.*.local
+debug_users.js
+tmp_reset.js
+topik_del.php
+FIREBASE_SETUP.md
 
-# Editor directories and files
+# OS / Editor Files
+node_modules
+.DS_Store
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -26,60 +28,17 @@ coverage
 *.njsproj
 *.sln
 *.sw?
-
 *.tsbuildinfo
 
-.eslintcache
-
-# Cypress
-/cypress/videos/
-/cypress/screenshots/
-
-# Vitest
-__screenshots__/
-
-# Vite
-*.timestamp-*-*.mjs
-
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-.DS_Store
+# Build / Stats
 dist
 dist-ssr
 coverage
-*.local
-.env
-.env.local
-.env.*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-*.tsbuildinfo
-
 .eslintcache
 
-# Cypress
+# Tooling Specific
 /cypress/videos/
 /cypress/screenshots/
-
-# Vitest
 __screenshots__/
-
-# Vite
 *.timestamp-*-*.mjs
+

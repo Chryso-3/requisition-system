@@ -23,7 +23,9 @@ const tableContainer = ref(null)
 
 let unsubscribe = null
 
-const approverWorkflow = computed(() => APPROVAL_WORKFLOW[authStore.role])
+const approverWorkflow = computed(() =>
+  authStore?.role ? APPROVAL_WORKFLOW[authStore.role] : null,
+)
 
 const pendingRequisitions = computed(() => {
   if (!approverWorkflow.value) return []
@@ -113,7 +115,9 @@ watch(totalRows, (newTotal) => {
 
     <div class="panel">
       <div class="panel-header">
-        <span class="role-context">{{ USER_ROLE_LABELS[authStore.role] }}</span>
+        <span class="role-context">{{
+          authStore?.role ? USER_ROLE_LABELS[authStore.role] : 'Loading...'
+        }}</span>
 
         <div v-if="pendingRequisitions.length > 0" class="header-tools">
           <label>View:</label>

@@ -8,10 +8,6 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Access allowed until this date (stability buffer)
-    function accessAllowed() {
-      return request.time < timestamp.date(2027, 2, 10);
-    }
 
     function getUserRole() {
       let path = /databases/$(database)/documents/users/$(request.auth.uid);
@@ -45,11 +41,11 @@ service cloud.firestore {
 
     match /requisitions/{requisitionId} {
       // Requesters can only see their own. Others (approvers/procurement/admin) can see all for workflow visibility.
-      allow read: if accessAllowed() && isSignedIn() && (getUserRole() != 'requester' || isOwner(resource.data) || isSuperAdmin());
+      allow read: if isSignedIn() && (getUserRole() != 'requester' || isOwner(resource.data) || isSuperAdmin());
       
-      allow create: if accessAllowed() && isSignedIn();
+      allow create: if isSignedIn();
 
-      allow update: if accessAllowed() && isSignedIn() && (
+      allow update: if isSignedIn() && (
         isSuperAdmin() ||
         // Requesters can only update their own DRAFTS
         (getUserRole() == 'requester' && isOwner(resource.data) && resource.data.status == 'draft') ||
@@ -66,7 +62,7 @@ service cloud.firestore {
       );
 
       // Requesters can delete their own DRAFTS. GM/Admin can delete any (with caution).
-      allow delete: if accessAllowed() && isSignedIn() && (
+      allow delete: if isSignedIn() && (
         isSuperAdmin() ||
         hasRole('general_manager') ||
         (getUserRole() == 'requester' && isOwner(resource.data) && resource.data.status == 'draft')
@@ -74,43 +70,45 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if accessAllowed() && isSignedIn();
-      allow write: if accessAllowed() && isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
     }
 
     match /transaction_log/{entryId} {
-      allow read: if accessAllowed() && isSignedIn();
-      // System writes logs on behalf of users; basically any auth user can append a log entry.
-      allow create: if accessAllowed() && isSignedIn();
-      allow update: if false; // Immutable logs
-      allow delete: if accessAllowed() && (hasRole('general_manager') || isSuperAdmin());
+      allow read: if isSignedIn();
+      // Allow creation by any authenticated user (logged during workflow actions)
+      allow create: if isSignedIn();
+      allow delete: if isSuperAdmin() || hasRole('internal_auditor') || hasRole('general_manager');
     }
 
     match /requisition_signatures/{sigId} {
-      allow read: if accessAllowed() && isSignedIn();
+      allow read: if isSignedIn();
       // Allow creation if the user has an approver/requester/procurement role
-      allow create, update: if accessAllowed() && isSignedIn();
-      allow delete: if isSuperAdmin();
+      allow create, update: if isSignedIn();
+      allow delete: if isSuperAdmin() || hasRole('internal_auditor') || hasRole('general_manager');
     }
 
     match /departments/{deptId} {
-      allow read: if accessAllowed() && isSignedIn();
-      allow write: if accessAllowed() && (isSuperAdmin() || (isSignedIn() && getUserRole() != 'requester'));
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin() || (isSignedIn() && getUserRole() != 'requester');
     }
 
     match /suppliers/{supplierId} {
-      allow read: if accessAllowed() && isSignedIn();
-      allow write: if accessAllowed() && (isSuperAdmin() || (isSignedIn() && getUserRole() != 'requester'));
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin() || (isSignedIn() && getUserRole() != 'requester');
     }
 
     match /items/{itemId} {
-      allow read: if accessAllowed() && isSignedIn();
-      allow write: if accessAllowed() && (isSuperAdmin() || (isSignedIn() && getUserRole() != 'requester'));
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin() || (isSignedIn() && getUserRole() != 'requester');
     }
 
     match /counters/{counterId} {
-      // Requesters need write to increment RF control numbers
-      allow read, write: if accessAllowed() && isSignedIn();
+      // Internal counters should only be modified by Super Admins or Cloud Functions.
+      // NOTE: We allow isSignedIn() write access here temporarily to support the client-side 
+      // fallback while the Cloud Function CORS issue is being resolved.
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     match /system_config/{docId} {
@@ -121,9 +119,9 @@ service cloud.firestore {
     // --- ANALYTICS ---
 
     match /analytics/{docId} {
-      // Explicitly allow read/write for all authenticated users.
-      // Removed accessAllowed() buffer to ensure no time-based locks interfere.
-      allow read, write: if request.auth != null;
+      // Only Super Admins, GMs, and Auditors can manually modify analytics; aggregation is handled by Cloud Functions
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin() || hasRole('general_manager') || hasRole('internal_auditor');
     }
   }
 }

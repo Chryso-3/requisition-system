@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 import { USER_ROLE_LABELS, USER_ROLES } from '@/firebase/collections'
 import { auth } from '@/firebase'
 import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 'firebase/auth'
+import StatusModal from '@/components/StatusModal.vue'
 
 const authStore = useAuthStore()
 
@@ -23,10 +24,22 @@ const showConfirmPassword = ref(false)
 const passwordChanging = ref(false)
 const passwordMessage = ref(null)
 
+// Modal State
+const statusModal = ref({
+  show: false,
+  status: 'success',
+  title: '',
+  message: '',
+})
+
+function showStatus(status, title, message) {
+  statusModal.value = { show: true, status, title, message }
+}
+
 const profile = computed(() => authStore.userProfile)
 const email = computed(() => authStore.user?.email ?? '—')
-const roleLabel = computed(() => USER_ROLE_LABELS[authStore.role] ?? authStore.role)
-const isPurchaser = computed(() => authStore.role === USER_ROLES.PURCHASER)
+const roleLabel = computed(() => USER_ROLE_LABELS[authStore?.role] ?? authStore?.role)
+const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
 /** E-signature: base64 stored in Firestore (no Storage required) */
 const signatureData = computed(() => profile.value?.signatureData ?? null)
 const memberSince = computed(() => {
@@ -37,7 +50,7 @@ const memberSince = computed(() => {
 })
 
 function initFromProfile() {
-  displayNameEdit.value = authStore.displayName || ''
+  displayNameEdit.value = authStore?.displayName || ''
 }
 initFromProfile()
 
@@ -51,16 +64,20 @@ async function saveProfile() {
   saveMessage.value = null
   try {
     await authStore.updateUserProfile({ displayName: name })
-    saveMessage.value = 'Profile saved.'
+    showStatus(
+      'success',
+      'Profile Updated',
+      'Your profile information has been saved successfully.',
+    )
   } catch (e) {
-    saveMessage.value = e?.message || 'Failed to save profile.'
+    showStatus('error', 'Update Failed', e?.message || 'Failed to save profile.')
   } finally {
     saving.value = false
   }
 }
 
 function avatarInitial() {
-  const name = authStore.displayName || authStore.user?.email || 'U'
+  const name = authStore?.displayName || authStore?.user?.email || 'U'
   return (name.charAt(0) || 'U').toUpperCase()
 }
 
@@ -96,13 +113,18 @@ function onSigFileChange(ev) {
         return
       }
       await authStore.updateUserProfile({ signatureData: dataUrl })
-      sigMessage.value = 'E-signature updated.'
+      showStatus(
+        'success',
+        'Signature Updated',
+        'Your electronic signature has been updated successfully.',
+      )
     } catch (e) {
       const msg = e?.message || e?.code || String(e)
-      sigMessage.value =
+      const errorMsg =
         msg.includes('permission') || msg.includes('Permission')
           ? 'Permission denied. Try signing out and back in, then upload again.'
           : `Failed to save signature: ${msg}`
+      showStatus('error', 'Upload Failed', errorMsg)
     } finally {
       sigUploading.value = false
     }
@@ -150,15 +172,20 @@ async function changePassword() {
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
-    passwordMessage.value = 'Password updated successfully.'
+    showStatus(
+      'success',
+      'Password Updated',
+      'Your security credentials have been updated successfully.',
+    )
   } catch (e) {
-    if (e?.code === 'auth/wrong-password' || e?.code === 'auth/invalid-credential') {
-      passwordMessage.value = 'Current password is incorrect.'
-    } else if (e?.code === 'auth/weak-password') {
-      passwordMessage.value = 'New password should be at least 6 characters.'
-    } else {
-      passwordMessage.value = e?.message || 'Failed to update password.'
-    }
+    const msg =
+      e?.code === 'auth/wrong-password' || e?.code === 'auth/invalid-credential'
+        ? 'Current password is incorrect.'
+        : e?.code === 'auth/weak-password'
+          ? 'New password should be at least 6 characters.'
+          : e?.message || 'Failed to update password.'
+
+    showStatus('error', 'Security Update Failed', msg)
   } finally {
     passwordChanging.value = false
   }
@@ -167,6 +194,15 @@ async function changePassword() {
 
 <template>
   <div class="profile-view">
+    <!-- Premium Status Modal -->
+    <StatusModal
+      :show="statusModal.show"
+      :status="statusModal.status"
+      :title="statusModal.title"
+      :message="statusModal.message"
+      @close="statusModal.show = false"
+    />
+
     <div class="profile-scroll">
       <!-- Elegant header with mesh gradient -->
       <header class="profile-header">
@@ -245,35 +281,6 @@ async function changePassword() {
                 <div class="form-input form-input-readonly form-input-static">
                   {{ memberSince }}
                 </div>
-              </div>
-              <div
-                v-if="saveMessage"
-                class="message-alert"
-                :class="saveMessage === 'Profile saved.' ? 'message-success' : 'message-error'"
-              >
-                <div class="message-icon">
-                  <svg
-                    v-if="saveMessage === 'Profile saved.'"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                  >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <svg
-                    v-else
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="12" />
-                    <line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
-                </div>
-                <span>{{ saveMessage }}</span>
               </div>
               <button type="button" class="btn btn-primary" :disabled="saving" @click="saveProfile">
                 <span v-if="saving" class="btn-loader"></span>
@@ -436,46 +443,6 @@ async function changePassword() {
                   </button>
                 </div>
               </div>
-              <div
-                v-if="passwordMessage"
-                class="message-alert"
-                :class="
-                  passwordMessage === 'Password updated successfully.'
-                    ? 'message-success'
-                    : 'message-error'
-                "
-              >
-                <div class="message-icon">
-                  <svg
-                    v-if="passwordMessage === 'Password updated successfully.'"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                  >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <svg
-                    v-else
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="12" />
-                    <line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
-                </div>
-                <span
-                  :class="
-                    passwordMessage === 'Password updated successfully.'
-                      ? 'text-success'
-                      : 'text-error'
-                  "
-                  >{{ passwordMessage }}</span
-                >
-              </div>
               <button
                 type="button"
                 class="btn btn-primary"
@@ -583,31 +550,6 @@ async function changePassword() {
                   <span class="sig-zone-overlay-text">Uploading signature...</span>
                 </div>
               </div>
-              <p
-                v-if="sigMessage"
-                class="sig-feedback"
-                :class="
-                  sigMessage === 'E-signature updated.'
-                    ? 'sig-feedback--success'
-                    : 'sig-feedback--error'
-                "
-              >
-                <svg
-                  v-if="sigMessage === 'E-signature updated.'"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.5"
-                >
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="8" x2="12" y2="12" />
-                  <line x1="12" y1="16" x2="12.01" y2="16" />
-                </svg>
-                <span>{{ sigMessage }}</span>
-              </p>
             </div>
           </section>
         </div>

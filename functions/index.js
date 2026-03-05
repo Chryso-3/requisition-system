@@ -1,4 +1,5 @@
 const { onDocumentWritten } = require('firebase-functions/v2/firestore')
+const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const admin = require('firebase-admin')
 
 admin.initializeApp()
@@ -247,3 +248,42 @@ function calculateTotal(items = []) {
 function isSpendRelevant(status) {
   return status === 'approved' || status === 'received'
 }
+/**
+ * Securely generates the next Requisition Control Number (RF-YYYY-000000).
+ * Uses a transaction to prevent duplicates in high-concurrency scenarios.
+ */
+exports.generateRFNumber = onCall({ cors: true, maxInstances: 10 }, async (request) => {
+  console.log('[generateRFNumber] Request received')
+
+  // Check auth
+  if (!request.auth) {
+    console.error('[generateRFNumber] Unauthenticated request')
+    throw new HttpsError('unauthenticated', 'The function must be called while authenticated.')
+  }
+
+  const counterRef = db.collection('counters').doc('requisitionRf')
+
+  try {
+    const result = await db.runTransaction(async (transaction) => {
+      const counterDoc = await transaction.get(counterRef)
+      let nextNo = 1
+      if (counterDoc.exists) {
+        nextNo = (counterDoc.data().lastNo || 0) + 1
+      }
+
+      transaction.set(counterRef, { lastNo: nextNo }, { merge: true })
+
+      const year = new Date().getFullYear()
+      const formattedNo = String(nextNo).padStart(6, '0')
+      const rfNumber = `RF-${year}-${formattedNo}`
+      console.log(`[generateRFNumber] Generated ${rfNumber}`)
+      return rfNumber
+    })
+
+    return { rfNumber: result }
+  } catch (error) {
+    console.error('[generateRFNumber] Transaction Error:', error)
+    // Specifically catch and rethrow as HttpsError so it's not just "internal"
+    throw new HttpsError('internal', error.message || 'Transactional error occurred')
+  }
+})

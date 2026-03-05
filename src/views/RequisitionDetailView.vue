@@ -121,7 +121,7 @@ const canEditDraft = computed(() => {
 
 const fromAuditLog = computed(() => from.value === 'audit-log')
 
-const approverRole = computed(() => authStore.role)
+const approverRole = computed(() => authStore?.role)
 
 const showApproveDecline = computed(() => {
   const r = requisition.value
@@ -130,10 +130,10 @@ const showApproveDecline = computed(() => {
 })
 
 const isProcurementStaff = computed(() => {
-  return authStore.role === USER_ROLES.PURCHASER || authStore.role === USER_ROLES.BAC_SECRETARY
+  return authStore?.role === USER_ROLES.PURCHASER || authStore?.role === USER_ROLES.BAC_SECRETARY
 })
 
-const isPurchaser = computed(() => authStore.role === USER_ROLES.PURCHASER)
+const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
 
 const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
 
@@ -142,9 +142,9 @@ const showProcurementDashboard = computed(() => {
   if (!r || r.status !== REQUISITION_STATUS.APPROVED) return false
 
   const isPOApprover =
-    authStore.role === USER_ROLES.BUDGET_OFFICER ||
-    authStore.role === USER_ROLES.INTERNAL_AUDITOR ||
-    authStore.role === USER_ROLES.GENERAL_MANAGER
+    authStore?.role === USER_ROLES.BUDGET_OFFICER ||
+    authStore?.role === USER_ROLES.INTERNAL_AUDITOR ||
+    authStore?.role === USER_ROLES.GENERAL_MANAGER
 
   return isProcurementStaff.value || (isPOApprover && !!r.poStatus)
 })
@@ -314,7 +314,9 @@ async function saveCanvassOrder() {
     await markRequisitionCanvassed(requisition.value.id, {
       canvassNumber: canvassNumber.value.trim() || undefined,
       canvassDate: canvassDate.value ? new Date(canvassDate.value + 'T12:00:00') : new Date(),
-      canvassBy: user ? { userId: user.uid, name: authStore.displayName, email: user.email } : null,
+      canvassBy: user
+        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
+        : null,
       supplier: supplier.value.trim(),
       items: canvassItems.value,
       signatureData: authStore.userProfile?.signatureData,
@@ -353,7 +355,9 @@ async function savePurchaseOrdered() {
       orderedAt: purchaseOrderedAt.value
         ? new Date(purchaseOrderedAt.value + 'T12:00:00')
         : new Date(),
-      orderedBy: user ? { userId: user.uid, name: authStore.displayName, email: user.email } : null,
+      orderedBy: user
+        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
+        : null,
       signatureData: authStore.userProfile?.signatureData,
     })
     closePurchaseOrderedModal()
@@ -389,7 +393,7 @@ async function savePurchaseReceived() {
         ? new Date(purchaseReceivedAt.value + 'T12:00:00')
         : new Date(),
       receivedBy: user
-        ? { userId: user.uid, name: authStore.displayName, email: user.email }
+        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
         : null,
       signatureData: authStore.userProfile?.signatureData,
     })
@@ -478,7 +482,7 @@ async function handleSubmit() {
     if (isRequestor.value && authStore.user) {
       updates.requestedBy = {
         userId: authStore.user.uid,
-        name: authStore.displayName,
+        name: authStore?.displayName,
         signedAt: new Date().toISOString(),
         // Signature is stored in a separate collection (see upsertRequisitionSignature)
       }
@@ -486,13 +490,13 @@ async function handleSubmit() {
     await submitRequisition(requisition.value.id, updates)
 
     // Save requestor signature separately (base64).
-    if (isRequestor.value && authStore.userProfile?.signatureData) {
+    if (isRequestor.value && authStore?.userProfile?.signatureData) {
       await upsertRequisitionSignature(requisition.value.id, 'requestedBy', {
-        userId: authStore.user.uid,
-        name: authStore.displayName,
+        userId: authStore?.user?.uid,
+        name: authStore?.displayName,
         title: 'Requestor',
         signedAt: updates.requestedBy?.signedAt ?? new Date().toISOString(),
-        signatureData: authStore.userProfile.signatureData,
+        signatureData: authStore?.userProfile?.signatureData,
       })
     }
   } catch (e) {
@@ -517,7 +521,7 @@ async function handleApprove() {
       requisition.value.id,
       {
         userId: authStore.user.uid,
-        name: authStore.displayName,
+        name: authStore?.displayName,
         email: authStore.user.email || '',
         signatureData: authStore.userProfile?.signatureData ?? null,
       },
@@ -549,7 +553,7 @@ async function handleDecline() {
       requisition.value.id,
       {
         userId: authStore.user.uid,
-        name: authStore.displayName,
+        name: authStore?.displayName,
         email: authStore.user.email || '',
       },
       remarks,
@@ -585,6 +589,15 @@ async function handleDiscardDraft() {
   error.value = null
   try {
     const parentPath = backPath.value
+    // Prevent the real-time listener from throwing "Requisition not found" when it's deleted
+    if (unsubscribe) {
+      unsubscribe()
+      unsubscribe = null
+    }
+    if (unsubscribeSigs) {
+      unsubscribeSigs()
+      unsubscribeSigs = null
+    }
     await deleteRequisition(requisition.value.id)
     router.push(parentPath)
   } catch (e) {
@@ -600,7 +613,7 @@ function doPrint() {
 
 function setPrintMode(mode) {
   const isProcurement =
-    authStore.role === USER_ROLES.PURCHASER || authStore.role === USER_ROLES.BAC_SECRETARY
+    authStore?.role === USER_ROLES.PURCHASER || authStore?.role === USER_ROLES.BAC_SECRETARY
   const isPOPhase = !!requisition.value?.poStatus
 
   if (mode === 'pbac-form-01' && !isProcurement && !isPOPhase) return
@@ -810,8 +823,8 @@ onUnmounted(() => {
               </button>
               <button
                 v-if="
-                  authStore.role === USER_ROLES.PURCHASER ||
-                  authStore.role === USER_ROLES.BAC_SECRETARY ||
+                  authStore?.role === USER_ROLES.PURCHASER ||
+                  authStore?.role === USER_ROLES.BAC_SECRETARY ||
                   !!requisition?.poStatus
                 "
                 type="button"
@@ -822,7 +835,7 @@ onUnmounted(() => {
               </button>
               <button
                 v-if="
-                  authStore.role === USER_ROLES.BAC_SECRETARY ||
+                  authStore?.role === USER_ROLES.BAC_SECRETARY ||
                   !!requisition?.poStatus ||
                   requisition?.purchaseStatus === PURCHASE_STATUS.ORDERED
                 "

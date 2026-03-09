@@ -305,9 +305,8 @@ onUnmounted(() => {
                   <td>{{ formatDate(r.date) }}</td>
                   <td>{{ getDeptAbbreviation(r.department) }}</td>
                   <td>{{ r.requestedBy?.name || '—' }}</td>
-                  <td class="purpose-cell">
-                    {{ (r.purpose || '').slice(0, 30)
-                    }}{{ (r.purpose || '').length > 30 ? '…' : '' }}
+                  <td class="purpose-cell" :title="r.purpose">
+                    {{ r.purpose || '—' }}
                   </td>
                   <td>
                     <span :class="['status-badge', r.status]">{{
@@ -721,6 +720,16 @@ onUnmounted(() => {
   background: #f8fafc;
   border-color: #cbd5e1;
   color: #1e293b;
+}
+
+.purpose-cell {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .status-badge {

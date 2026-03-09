@@ -483,6 +483,7 @@ async function handleSubmit() {
       updates.requestedBy = {
         userId: authStore.user.uid,
         name: authStore?.displayName,
+        email: authStore.user.email || '',
         signedAt: new Date().toISOString(),
         // Signature is stored in a separate collection (see upsertRequisitionSignature)
       }

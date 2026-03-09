@@ -6,11 +6,14 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
   updateProfile,
+  signInWithPopup,
 } from 'firebase/auth'
 import { doc, setDoc, disableNetwork, enableNetwork } from 'firebase/firestore'
-import { auth, db } from '@/firebase'
+import { auth, db, googleProvider } from '@/firebase'
 import { unsubscribeAllSubscriptions } from '@/services/requisitionService'
 import { COLLECTIONS, USER_ROLES } from '@/firebase/collections'
+import { httpsCallable } from 'firebase/functions'
+import { functions } from '@/firebase'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
@@ -18,6 +21,12 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(true)
 
   const isAuthenticated = computed(() => !!user.value)
+  const isSocialOnly = computed(() => {
+    return user.value?.providerData.every((p) => p.providerId !== 'password') ?? false
+  })
+  const hasPassword = computed(() => {
+    return user.value?.providerData.some((p) => p.providerId === 'password') ?? false
+  })
   const displayName = computed(
     () =>
       userProfile.value?.displayName ??
@@ -65,10 +74,58 @@ export const useAuthStore = defineStore('auth', () => {
       throw error
     }
 
+    // REQUIRE OTP for email/password if configured (Placeholder logic for now)
+    // In a real scenario, we might trigger the OTP send here and NOT set the user yet
+    // or set a flag that they are "partially authenticated".
+    // For this implementation, we will assume signIn completes the FIRST step.
+
     user.value = cred.user
     userProfile.value = profile
     loading.value = false
     return cred.user
+  }
+
+  async function signInWithGoogle() {
+    const cred = await signInWithPopup(auth, googleProvider)
+
+    // Check if user profile exists, if not create it
+    const { getDoc, doc, setDoc } = await import('firebase/firestore')
+    const snap = await getDoc(doc(db, COLLECTIONS.USERS, cred.user.uid))
+
+    if (!snap.exists()) {
+      const email = cred.user.email
+      const displayName = cred.user.displayName || email.split('@')[0]
+      const userRole = USER_ROLES.REQUESTER
+
+      await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), {
+        email,
+        displayName,
+        role: userRole,
+        createdAt: new Date().toISOString(),
+        isActive: true,
+      })
+      userProfile.value = { displayName, role: userRole }
+    } else {
+      userProfile.value = snap.data()
+    }
+
+    user.value = cred.user
+    loading.value = false
+    return cred.user
+  }
+
+  async function sendOTP(email) {
+    const sendOTPFunction = httpsCallable(functions, 'sendOTP')
+    return await sendOTPFunction({ email })
+  }
+
+  async function verifyOTP(email, code) {
+    const verifyOTPFunction = httpsCallable(functions, 'verifyOTP')
+    const result = await verifyOTPFunction({ email, code })
+    if (result.data?.success) {
+      otpVerified.value = true
+    }
+    return result.data
   }
 
   async function signOut() {
@@ -143,19 +200,33 @@ export const useAuthStore = defineStore('auth', () => {
     await loadUserProfile(uid)
   }
 
+  async function linkEmailPassword(email, password) {
+    const { linkWithCredential, EmailAuthProvider } = await import('firebase/auth')
+    const credential = EmailAuthProvider.credential(email, password)
+    const result = await linkWithCredential(auth.currentUser, credential)
+    user.value = result.user
+    return result.user
+  }
+
   return {
     user,
     userProfile,
     loading,
     isAuthenticated,
+    isSocialOnly,
+    hasPassword,
     displayName,
     role,
     setUser,
     signUp,
     signIn,
+    signInWithGoogle,
+    sendOTP,
+    verifyOTP,
     signOut,
     loadUserProfile,
     updateUserProfile,
+    linkEmailPassword,
     initAuthListener,
     waitForAuthReady,
   }

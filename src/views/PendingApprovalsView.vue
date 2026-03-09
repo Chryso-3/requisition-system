@@ -184,9 +184,8 @@ watch(totalRows, (newTotal) => {
                   <td>{{ formatDate(r.date) }}</td>
                   <td>{{ getDeptAbbreviation(r.department) }}</td>
                   <td>{{ r.requestedBy?.name || '—' }}</td>
-                  <td class="purpose-cell">
-                    {{ (r.purpose || '').slice(0, 30)
-                    }}{{ (r.purpose || '').length > 30 ? '…' : '' }}
+                  <td class="purpose-cell" :title="r.purpose">
+                    {{ r.purpose || '—' }}
                   </td>
                   <td>
                     <span :class="['status-badge', r.status]">{{
@@ -426,7 +425,13 @@ watch(totalRows, (newTotal) => {
   text-align: center;
 }
 .purpose-cell {
-  max-width: 180px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
 }
 .action-cell {
   text-align: center;

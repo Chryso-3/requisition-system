@@ -24,6 +24,9 @@ const showConfirmPassword = ref(false)
 const passwordChanging = ref(false)
 const passwordMessage = ref(null)
 
+const isSocialOnly = computed(() => authStore.isSocialOnly)
+const hasPassword = computed(() => authStore.hasPassword)
+
 // Modal State
 const statusModal = ref({
   show: false,
@@ -141,6 +144,39 @@ async function changePassword() {
   const cur = (currentPassword.value || '').trim()
   const newP = (newPassword.value || '').trim()
   const conf = (confirmPassword.value || '').trim()
+
+  if (!hasPassword.value && isSocialOnly.value) {
+    // Setting password for the first time for social login
+    if (!newP) {
+      passwordMessage.value = 'Enter a password.'
+      return
+    }
+    if (newP.length < 6) {
+      passwordMessage.value = 'Password must be at least 6 characters.'
+      return
+    }
+    if (newP !== conf) {
+      passwordMessage.value = 'Passwords do not match.'
+      return
+    }
+
+    passwordChanging.value = true
+    try {
+      await authStore.linkEmailPassword(email.value, newP)
+      newPassword.value = ''
+      confirmPassword.value = ''
+      showStatus(
+        'success',
+        'Password Established',
+        'You can now also sign in using your email and this password.',
+      )
+    } catch (e) {
+      showStatus('error', 'Setup Failed', e?.message || 'Failed to establish password.')
+    } finally {
+      passwordChanging.value = false
+    }
+    return
+  }
 
   if (!cur) {
     passwordMessage.value = 'Enter your current password.'
@@ -315,12 +351,19 @@ async function changePassword() {
                 </div>
               </div>
               <div class="card-header-text">
-                <h2 class="card-title">Security Settings</h2>
-                <p class="card-subtitle">Update your password</p>
+                <h2 class="card-title">{{ hasPassword ? 'Security Settings' : 'Step Setup' }}</h2>
+                <p class="card-subtitle">
+                  {{ hasPassword ? 'Update your password' : 'Create a password for your email' }}
+                </p>
               </div>
             </div>
             <div class="card-body">
-              <div class="form-group">
+              <p v-if="!hasPassword" class="info-alert">
+                Adding a password allows you to sign in directly using your email address, in
+                addition to Google.
+              </p>
+
+              <div v-if="hasPassword" class="form-group">
                 <label class="form-label">Current Password</label>
                 <div class="input-with-icon">
                   <input
@@ -446,7 +489,12 @@ async function changePassword() {
               <button
                 type="button"
                 class="btn btn-primary"
-                :disabled="passwordChanging || !currentPassword || !newPassword || !confirmPassword"
+                :disabled="
+                  passwordChanging ||
+                  (hasPassword && !currentPassword) ||
+                  !newPassword ||
+                  !confirmPassword
+                "
                 @click="changePassword"
               >
                 <span v-if="passwordChanging" class="btn-loader"></span>
@@ -455,7 +503,17 @@ async function changePassword() {
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                   </svg>
                 </span>
-                <span>{{ passwordChanging ? 'Updating Password...' : 'Update Password' }}</span>
+                <span>
+                  {{
+                    passwordChanging
+                      ? hasPassword
+                        ? 'Updating Password...'
+                        : 'Setting Password...'
+                      : hasPassword
+                        ? 'Update Password'
+                        : 'Set Login Password'
+                  }}
+                </span>
               </button>
             </div>
           </section>
@@ -1243,9 +1301,21 @@ async function changePassword() {
   line-height: 1.5;
   border-radius: var(--radius-sm);
   animation: fadeSlideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  color: red;
+  color: #941b1b;
 }
 
+.info-alert {
+  background: #eff6ff;
+  color: #1e40af;
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+  border: 1px solid #bfdbfe;
+}
+
+/* Modal Transition */
 .message-icon {
   flex-shrink: 0;
   width: 1.375rem;

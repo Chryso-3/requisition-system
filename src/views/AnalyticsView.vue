@@ -66,42 +66,125 @@ const isGM = computed(
 
 function updateData() {
   if (!summaryData.value) return
-  console.log('[Analytics] Summary data received:', summaryData.value)
 
   const preset = dateRangePreset.value
+  const s = summaryData.value
   const now = new Date()
+
+  // All known workflow stages – used to guarantee Req + PO charts always render
+  const ALL_STAGES = [
+    'submission_to_recommend',
+    'recommend_to_inventory',
+    'inventory_to_budget',
+    'budget_to_audit',
+    'audit_to_gm',
+    'gm_to_fulfillment',
+    'req_appr_to_po_issue',
+    'po_issue_to_po_budget',
+    'po_budget_to_po_audit',
+    'po_audit_to_po_gm',
+  ]
+
+  // ── 1. Build sorted, chronological filteredMonths list ───────────────────
   let filteredMonths = []
-
-  // Determine which monthly buckets to include
   if (preset === 'all') {
-    filteredMonths = Object.keys(summaryData.value.byMonth || {})
+    filteredMonths = Object.keys(s.byMonth || {}).sort()
   } else {
-    let monthsToLookBack = 1
-    if (preset === 'last_3_months') monthsToLookBack = 3
-    if (preset === 'last_6_months') monthsToLookBack = 6
-
-    for (let i = 0; i < monthsToLookBack; i++) {
+    let lookBack = 1
+    if (preset === 'last_3_months') lookBack = 3
+    else if (preset === 'last_6_months') lookBack = 6
+    for (let i = lookBack - 1; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
       filteredMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
     }
+    // filteredMonths is already oldest → newest
   }
 
-  // Aggregate stats from filters
-  const rangeStats = { count: 0, value: 0, approved: 0, rejected: 0 }
-  filteredMonths.forEach((m) => {
-    const bucket = summaryData.value.byMonth?.[m]
-    if (bucket) {
-      rangeStats.count += bucket.count || 0
-      rangeStats.value += bucket.value || 0
-      rangeStats.approved += bucket.approved || 0
-      rangeStats.rejected += bucket.rejected || 0
-    }
+  // ── 2. Aggregate from monthly buckets ────────────────────────────────────
+  const zeroDur = () => ({ totalMs: 0, count: 0, activeTotalMs: 0, activeCount: 0 })
+  const agg = {
+    count: 0,
+    value: 0,
+    approved: 0,
+    rejected: 0,
+    leadTimeMs: 0,
+    leadTimeCount: 0,
+    byStatus: {},
+    byDepartment: {},
+    poByStatus: {},
+    durations: Object.fromEntries(ALL_STAGES.map((k) => [k, zeroDur()])),
+    purchaseBreakdown: { pending: 0, ordered: 0, received: 0 },
+    departmentalSpend: {},
+  }
+
+  filteredMonths.forEach((key) => {
+    const b = s.byMonth?.[key]
+    if (!b) return
+    agg.count += b.count || 0
+    agg.value += b.value || 0
+    agg.approved += b.approved || 0
+    agg.rejected += b.rejected || 0
+    agg.leadTimeMs += b.leadTimeMs || 0
+    agg.leadTimeCount += b.leadTimeCount || 0
+    Object.entries(b.byStatus || {}).forEach(([k, v]) => {
+      agg.byStatus[k] = (agg.byStatus[k] || 0) + v
+    })
+    Object.entries(b.byDepartment || {}).forEach(([k, v]) => {
+      agg.byDepartment[k] = (agg.byDepartment[k] || 0) + v
+    })
+    Object.entries(b.poByStatus || {}).forEach(([k, v]) => {
+      agg.poByStatus[k] = (agg.poByStatus[k] || 0) + v
+    })
+    Object.entries(b.durations || {}).forEach(([k, v]) => {
+      if (!agg.durations[k]) agg.durations[k] = zeroDur()
+      agg.durations[k].totalMs += v.totalMs || 0
+      agg.durations[k].count += v.count || 0
+      agg.durations[k].activeTotalMs += v.activeTotalMs || 0
+      agg.durations[k].activeCount += v.activeCount || 0
+    })
+    Object.entries(b.purchaseBreakdown || {}).forEach(([k, v]) => {
+      agg.purchaseBreakdown[k] = (agg.purchaseBreakdown[k] || 0) + v
+    })
+    Object.entries(b.departmentalSpend || {}).forEach(([k, v]) => {
+      agg.departmentalSpend[k] = (agg.departmentalSpend[k] || 0) + v
+    })
   })
 
-  // Re-map summaryData to the format renderCharts expects
-  const s = summaryData.value
+  // ── 3. Fallback to global Firestore top-level fields when buckets are empty ─
+  // Monthly buckets only have sub-fields after running Sync with the new schema.
+  // Before that, the data lives at the top level of the analytics document.
+  const hasSubData = Object.values(agg.byStatus).some((v) => v > 0)
+  const byStatusSrc = hasSubData ? agg.byStatus : s.byStatus || {}
+  const byDeptSrc = hasSubData ? agg.byDepartment : s.byDepartment || {}
+  const poByStatusSrc = hasSubData ? agg.poByStatus : s.poByStatus || {}
+  const deptSpendSrc = hasSubData ? agg.departmentalSpend : s.departmentalSpend || {}
 
-  // Pipeline
+  const effApproved =
+    agg.approved > 0 ? agg.approved : s.byStatus?.[REQUISITION_STATUS.APPROVED] || 0
+  const effRejected =
+    agg.rejected > 0 ? agg.rejected : s.byStatus?.[REQUISITION_STATUS.REJECTED] || 0
+  const effValue = agg.value > 0 ? agg.value : s.totalApprovedValue || 0
+
+  const hasDurData = Object.values(agg.durations).some((d) => d.count > 0 || d.activeCount > 0)
+  const durSrc = hasDurData
+    ? agg.durations
+    : (() => {
+        const fallback = Object.fromEntries(ALL_STAGES.map((k) => [k, zeroDur()]))
+        Object.entries(s.durations || {}).forEach(([k, v]) => {
+          if (fallback[k]) {
+            fallback[k] = {
+              totalMs: v.totalMs || 0,
+              count: v.count || 0,
+              activeTotalMs: v.activeTotalMs || 0,
+              activeCount: v.activeCount || 0,
+            }
+          }
+        })
+        return fallback
+      })()
+
+  // ── 4. Build chart-ready structures ──────────────────────────────────────
+
   const statusOrder = [
     'draft',
     'pending_recommendation',
@@ -112,15 +195,14 @@ function updateData() {
     'approved',
     'rejected',
   ]
-  const pipelineTotal = Object.values(s.byStatus || {}).reduce((a, b) => a + b, 0)
+  const pipelineTotal = Object.values(byStatusSrc).reduce((a, b) => a + b, 0)
   const pipelineWithPct = statusOrder.map((status) => ({
     status,
-    count: s.byStatus?.[status] || 0,
-    pct: pipelineTotal > 0 ? Math.round(((s.byStatus?.[status] || 0) / pipelineTotal) * 100) : 0,
+    count: byStatusSrc[status] || 0,
+    pct: pipelineTotal > 0 ? Math.round(((byStatusSrc[status] || 0) / pipelineTotal) * 100) : 0,
   }))
 
-  // Departments
-  const byDepartment = Object.entries(s.byDepartment || {})
+  const byDepartment = Object.entries(byDeptSrc)
     .map(([department, count]) => ({
       department: getDeptAbbreviation(department),
       count,
@@ -128,80 +210,87 @@ function updateData() {
     }))
     .sort((a, b) => b.count - a.count)
 
-  // PO Pipeline
   const poStatusOrder = ['pending_budget', 'pending_audit', 'pending_gm', 'approved', 'rejected']
-  const poTotal = Object.values(s.poByStatus || {}).reduce((a, b) => a + b, 0)
-  console.log('[Analytics] PO total:', poTotal, 'Raw map:', s.poByStatus)
+  const poTotal = Object.values(poByStatusSrc).reduce((a, b) => a + b, 0)
   const poPipelineWithPct = poStatusOrder.map((status) => ({
     status,
-    count: s.poByStatus?.[status] || 0,
-    pct: poTotal > 0 ? Math.round(((s.poByStatus?.[status] || 0) / poTotal) * 100) : 0,
+    count: poByStatusSrc[status] || 0,
+    pct: poTotal > 0 ? Math.round(((poByStatusSrc[status] || 0) / poTotal) * 100) : 0,
   }))
 
-  // Monthly Trend (Always map last 6 months)
-  const monthlyTrend = []
-  for (let i = 5; i >= 0; i--) {
-    const m = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const key = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`
-    const bucket = s.byMonth?.[key] || { count: 0, value: 0 }
-    monthlyTrend.push({
-      monthLabel: m.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-      total: bucket.count,
-      value: bucket.value,
-    })
+  // Trend chart: ALWAYS show rolling 12 months for "Strategic" context, regardless of preset
+  const rolling12Months = []
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    rolling12Months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
   }
 
-  // Bottlenecks from durations
-  const bottlenecks = Object.entries(s.durations || {}).map(([stage, dur]) => ({
-    stage,
-    avgDays: dur.count > 0 ? (dur.totalMs / dur.count / (1000 * 60 * 60 * 24)).toFixed(2) : 0,
-  }))
-  console.log('[Analytics] Bottlenecks raw durations:', s.durations)
+  const monthlyTrend = rolling12Months.map((key) => {
+    const [y, m] = key.split('-')
+    const d = new Date(parseInt(y), parseInt(m) - 1, 1)
+    const b = s.byMonth?.[key] || {}
+    return {
+      monthLabel: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+      total: b.count || 0,
+      value: b.value || 0,
+    }
+  })
 
-  const globalApprovedCount = s.byStatus?.[REQUISITION_STATUS.APPROVED] || 0
-  const globalRejectedCount = s.byStatus?.[REQUISITION_STATUS.REJECTED] || 0
-  const arTotal = globalApprovedCount + globalRejectedCount
+  // Bottlenecks: MAP from full ALL_STAGES list (guarantees Req + PO always render)
+  const bottlenecks = ALL_STAGES.map((stage) => {
+    const dur = durSrc[stage] || zeroDur()
+    return {
+      stage,
+      avgDays: dur.count > 0 ? (dur.totalMs / dur.count / 86400000).toFixed(2) : 0,
+      activeCount: dur.activeCount || 0,
+      activeAvgDays:
+        dur.activeCount > 0 ? (dur.activeTotalMs / dur.activeCount / 86400000).toFixed(2) : 0,
+    }
+  })
 
+  const gApproved = s.byStatus?.[REQUISITION_STATUS.APPROVED] || 0
+  const gRejected = s.byStatus?.[REQUISITION_STATUS.REJECTED] || 0
+  const gTotal = gApproved + gRejected
+
+  // ── 5. Set reactive data ──────────────────────────────────────────────────
   data.value = {
     summary: {
       pendingApproval: s.summary?.pendingApproval || 0,
-      approvedThisMonth: rangeStats.approved,
-      rejectedThisMonth: rangeStats.rejected,
+      approvedThisMonth: effApproved,
+      rejectedThisMonth: effRejected,
       approvedPct:
-        rangeStats.approved + rangeStats.rejected > 0
-          ? Math.round((rangeStats.approved / (rangeStats.approved + rangeStats.rejected)) * 100)
+        effApproved + effRejected > 0
+          ? Math.round((effApproved / (effApproved + effRejected)) * 100)
           : 0,
       rejectedPct:
-        rangeStats.approved + rangeStats.rejected > 0
-          ? Math.round((rangeStats.rejected / (rangeStats.approved + rangeStats.rejected)) * 100)
+        effApproved + effRejected > 0
+          ? Math.round((effRejected / (effApproved + effRejected)) * 100)
           : 0,
-      avgLeadTimeDays: s.summary?.avgLeadTimeDays || '—',
-      totalApprovedValue: rangeStats.value,
+      avgLeadTimeDays:
+        agg.leadTimeCount > 0
+          ? (agg.leadTimeMs / agg.leadTimeCount / 86400000).toFixed(2)
+          : s.summary?.avgLeadTimeDays || '—',
+      totalApprovedValue: effValue,
+      avgOrderValue: effApproved > 0 ? effValue / effApproved : 0,
     },
     pipelineWithPct,
     poPipelineWithPct,
     byDepartment,
     monthlyTrend,
     approvedVsRejected: {
-      approved: globalApprovedCount,
-      rejected: globalRejectedCount,
-      approvedPct: arTotal > 0 ? Math.round((globalApprovedCount / arTotal) * 100) : 0,
-      rejectedPct: arTotal > 0 ? Math.round((globalRejectedCount / arTotal) * 100) : 0,
+      approved: gApproved,
+      rejected: gRejected,
+      approvedPct: gTotal > 0 ? Math.round((gApproved / gTotal) * 100) : 0,
+      rejectedPct: gTotal > 0 ? Math.round((gRejected / gTotal) * 100) : 0,
     },
-    purchaseBreakdown: s.purchaseBreakdown || {},
-    productivity: {
-      bottlenecks,
-    },
+    purchaseBreakdown: agg.purchaseBreakdown,
+    productivity: { bottlenecks },
     financials: {
-      departmentalSpend: Object.entries(s.departmentalSpend || {})
-        .map(([department, total]) => ({
-          department: getDeptAbbreviation(department),
-          total,
-        }))
+      departmentalSpend: Object.entries(deptSpendSrc)
+        .map(([department, total]) => ({ department: getDeptAbbreviation(department), total }))
         .sort((a, b) => b.total - a.total),
     },
   }
-  console.log('[Analytics] Processed data for charts:', data.value)
 }
 
 function startRealtime() {
@@ -626,7 +715,10 @@ function renderCharts() {
           'po_audit_to_po_gm',
         ]
 
-    const bn = data.value.productivity.bottlenecks.filter((b) => allowed.includes(b.stage))
+    const bn = allowed.map((stage) => {
+      const match = data.value.productivity.bottlenecks.find((b) => b.stage === stage)
+      return match || { stage, avgDays: 0, activeCount: 0, activeAvgDays: 0 }
+    })
     console.log('[Analytics] Rendering Bottlenecks Chart:', {
       phase: bottleneckPhase.value,
       bottlenecks: JSON.parse(JSON.stringify(bn)),
@@ -660,15 +752,34 @@ function renderCharts() {
     chartBottlenecks = new Chart(bottleneckEl, {
       type: 'bar',
       data: {
-        labels: bn.map((b) => bnLabels[b.stage] || b.stage),
+        labels: bn.map((b) => {
+          const label = bnLabels[b.stage] || b.stage
+          return b.activeCount > 0 ? `${label} (${b.activeCount} pending)` : label
+        }),
         datasets: [
           {
-            label: 'Avg days',
+            label: 'Historical Avg (days)',
             data: bn.map((b) => Math.max(0, parseFloat(b.avgDays) || 0)),
-            backgroundColor: gradient,
-            hoverBackgroundColor: isReq ? '#ff0000' : '#00ffff',
-            borderRadius: { topRight: 10, bottomRight: 10, topLeft: 0, bottomLeft: 0 },
-            barThickness: 16,
+            backgroundColor: bn.map((b) => {
+              const days = parseFloat(b.avgDays) || 0
+              if (days >= 3) return '#ef4444' // Red
+              if (days >= 1) return '#f59e0b' // Amber
+              return '#10b981' // Emerald
+            }),
+            borderRadius: 5,
+            barThickness: 12,
+          },
+          {
+            label: 'Current Active Aging',
+            data: bn.map((b) => Math.max(0, parseFloat(b.activeAvgDays) || 0)),
+            backgroundColor: bn.map((b) => {
+              const days = parseFloat(b.activeAvgDays) || 0
+              if (days >= 3) return '#991b1b' // Dark Red
+              if (days >= 1) return '#92400e' // Dark Amber
+              return '#065f46' // Dark Emerald
+            }),
+            borderRadius: 5,
+            barThickness: 12,
           },
         ],
       },
@@ -677,7 +788,11 @@ function renderCharts() {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: false },
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: { boxWidth: 10, font: { size: 10, family: defaultFont } },
+          },
           tooltip: {
             backgroundColor: cardBgColor,
             titleColor: '#0f172a',
@@ -686,7 +801,13 @@ function renderCharts() {
             borderWidth: 1,
             padding: 8,
             cornerRadius: 8,
-            callbacks: { label: (ctx) => `${ctx.parsed.x} days` },
+            callbacks: {
+              label: (ctx) => {
+                const b = bn[ctx.dataIndex]
+                if (ctx.datasetIndex === 0) return ` Historical Avg: ${b.avgDays} d`
+                return ` Active Aging: ${b.activeAvgDays} d (${b.activeCount} items)`
+              },
+            },
           },
         },
         scales: {
@@ -1067,8 +1188,8 @@ onUnmounted(() => {
                   <p class="text-xs text-muted-foreground">
                     {{
                       bottleneckPhase === 'requisition'
-                        ? 'Avg days per requisition approval stage'
-                        : 'Avg days per PO approval step'
+                        ? 'Historical averages vs. current aging for requisition stages'
+                        : 'Historical averages vs. current aging for PO approval steps'
                     }}
                   </p>
                 </div>

@@ -43,4 +43,8 @@ isSupported().then((yes) => {
 })
 export { analytics }
 
+// Auth Providers
+import { GoogleAuthProvider } from 'firebase/auth'
+export const googleProvider = new GoogleAuthProvider()
+
 export default app

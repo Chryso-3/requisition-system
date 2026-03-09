@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import { USER_ROLE_LABELS, USER_ROLES } from '@/firebase/collections'
 import { listRequisitionsSimple, APPROVAL_WORKFLOW } from '@/services/requisitionService'
 import { useSystemStore } from '@/stores/system'
+import { useNotificationStore } from '@/stores/notifications'
 import {
   User,
   LogOut,
@@ -13,15 +14,18 @@ import {
   AlertTriangle,
   Info,
   CheckCircle,
+  Bell,
 } from 'lucide-vue-next'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const systemStore = useSystemStore()
+const notificationStore = useNotificationStore()
 const showUserMenu = ref(false)
-const pendingCount = ref(0)
+const showNotificationMenu = ref(false)
 const pendingPOCount = ref(0)
+const pendingCount = computed(() => notificationStore.unreadCount)
 
 const roleLabel = computed(() =>
   authStore?.role ? USER_ROLE_LABELS[authStore.role] || 'User' : 'Loading...',
@@ -43,12 +47,8 @@ const isSuperAdmin = computed(() => authStore?.role === USER_ROLES.SUPER_ADMIN)
 async function loadPendingCount() {
   if (!isApprover.value) return
   try {
-    // 1. Requisition Pending Count
-    const workflow = authStore?.role ? APPROVAL_WORKFLOW[authStore.role] : null
-    if (workflow) {
-      const reqs = await listRequisitionsSimple({ status: workflow.canApproveStatus })
-      pendingCount.value = reqs.length
-    }
+    // 1. Requisition Pending Count (Real-time listener)
+    notificationStore.initNotificationListener()
 
     // 2. PO Pending Count
     let poStatusFilter = null
@@ -98,23 +98,30 @@ function closeUserMenu() {
 
 // Click outside to close
 function handleClickOutside(event) {
-  const menu = document.querySelector('.user-menu')
-  if (showUserMenu.value && menu && !menu.contains(event.target)) {
+  const userMenu = document.querySelector('.user-menu')
+  if (showUserMenu.value && userMenu && !userMenu.contains(event.target)) {
     closeUserMenu()
+  }
+
+  const notifMenu = document.querySelector('.notification-wrapper')
+  if (showNotificationMenu.value && notifMenu && !notifMenu.contains(event.target)) {
+    showNotificationMenu.value = false
   }
 }
 
-let pendingInterval = null
+function handleNotificationClick(id) {
+  router.push(`/requisitions/${id}`)
+  showNotificationMenu.value = false
+}
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   setTimeout(loadPendingCount, 400)
-  pendingInterval = setInterval(loadPendingCount, 30000)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  if (pendingInterval) clearInterval(pendingInterval)
+  notificationStore.stopListener()
 })
 
 // Real-time maintenance enforcement
@@ -669,6 +676,56 @@ watch(
           >
             Analytics
           </router-link>
+
+          <!-- Notification Bell -->
+          <div class="notification-wrapper">
+            <button
+              class="notification-btn"
+              :class="{ 'has-unread': pendingCount > 0 }"
+              @click="showNotificationMenu = !showNotificationMenu"
+            >
+              <Bell :size="20" />
+              <span v-if="pendingCount > 0" class="notification-badge">{{ pendingCount }}</span>
+            </button>
+
+            <Transition name="dropdown-slide">
+              <div v-if="showNotificationMenu" class="notification-dropdown">
+                <div class="dropdown-header">
+                  <span>Notifications</span>
+                  <span v-if="pendingCount > 0" class="count-pill">{{ pendingCount }} New</span>
+                </div>
+                <div class="notification-list">
+                  <div v-if="notificationStore.loading" class="notification-empty">Loading...</div>
+                  <template v-else-if="notificationStore.notifications.length > 0">
+                    <div
+                      v-for="notif in notificationStore.notifications"
+                      :key="notif.id"
+                      class="notification-item"
+                      @click="handleNotificationClick(notif.id)"
+                    >
+                      <div class="notif-icon">📄</div>
+                      <div class="notif-content">
+                        <div class="notif-title">
+                          {{ notif.controlNumber || 'New Requisition' }}
+                        </div>
+                        <div class="notif-subtitle">From {{ notif.requestedBy?.name }}</div>
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else class="notification-empty">No pending tasks</div>
+                </div>
+                <div class="dropdown-footer">
+                  <router-link
+                    to="/all-requisitions"
+                    @click="showNotificationMenu = false"
+                    class="view-all"
+                  >
+                    View Approvals
+                  </router-link>
+                </div>
+              </div>
+            </Transition>
+          </div>
           <div
             class="user-menu"
             role="button"
@@ -1285,5 +1342,127 @@ watch(
   .main {
     padding: 0 !important;
   }
+}
+/* Notifications */
+.notification-wrapper {
+  position: relative;
+  margin-right: 1.5rem;
+}
+
+.notification-btn {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  position: relative;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notification-btn:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.notification-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #ef4444;
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 10px;
+  border: 2px solid white;
+}
+
+.notification-dropdown {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 320px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.notification-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.notification-item {
+  padding: 1rem;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.2s;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.notification-item:hover {
+  background: #f8fafc;
+}
+
+.notif-icon {
+  width: 40px;
+  height: 40px;
+  background: #eff6ff;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+}
+
+.notif-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #1e293b;
+}
+
+.notif-subtitle {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.notification-empty {
+  padding: 2rem;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.875rem;
+}
+
+.count-pill {
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.view-all {
+  display: block;
+  text-align: center;
+  padding: 0.75rem;
+  background: #f8fafc;
+  color: #2563eb;
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.view-all:hover {
+  background: #f1f5f9;
 }
 </style>

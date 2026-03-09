@@ -189,7 +189,7 @@ const downloadScopeLabel = computed(() => {
   if (preset === 'this_month' && logStartDate.value)
     return `This month (${formatScopeMonth(logStartDate.value)})`
   if (preset === 'custom' && logStartDate.value && logEndDate.value)
-    return `${formatScopeDate(logStartDate.value)} â€“ ${formatScopeDate(logEndDate.value)}`
+    return `${formatScopeDate(logStartDate.value)} – ${formatScopeDate(logEndDate.value)}`
   if (preset === 'today') return 'Today'
   if (preset === 'this_month') return 'This month'
   if (preset === 'custom') return 'Custom range'
@@ -216,7 +216,9 @@ const journaledJourneys = computed(() => {
     }
     map[entry.requisitionId].entries.push(entry)
     // Update latest timestamp if needed (though they are usually sorted desc)
-    if (new Date(entry.signedAt) > new Date(map[entry.requisitionId].latestAt)) {
+    const entryDate = entrySignedAt(entry)
+    const currentLatest = entrySignedAt({ signedAt: map[entry.requisitionId].latestAt })
+    if (entryDate && (!currentLatest || entryDate > currentLatest)) {
       map[entry.requisitionId].latestAt = entry.signedAt
     }
   })
@@ -250,7 +252,8 @@ function handlePageChange(p) {
 const groupedJourneys = computed(() => {
   const groups = []
   paginatedJourneys.value.forEach((journey) => {
-    const d = new Date(journey.latestAt)
+    const d = entrySignedAt({ signedAt: journey.latestAt })
+    if (!d) return
     const dateStr = d.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
@@ -271,12 +274,17 @@ const groupedJourneys = computed(() => {
 function getDateLabel(date) {
   const now = new Date()
   const d = new Date(date)
+  const dateStr = d.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
   d.setHours(0, 0, 0, 0)
   now.setHours(0, 0, 0, 0)
-  const diff = (now - d) / (1000 * 60 * 60 * 24)
-  if (diff === 0) return 'Today'
-  if (diff === 1) return 'Yesterday'
-  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+  const diff = Math.round((now - d) / (1000 * 60 * 60 * 24))
+  if (diff === 0) return `Today · ${dateStr}`
+  if (diff === 1) return `Yesterday · ${dateStr}`
+  return dateStr
 }
 
 // Journey Trail Helpers
@@ -352,8 +360,10 @@ function getJourneyTrail(journey) {
 }
 
 function timeSince(date, relativeTo) {
-  const d = new Date(date)
-  const rel = relativeTo ? new Date(relativeTo) : new Date()
+  const d = entrySignedAt({ signedAt: date })
+  if (!d) return '—'
+  const rel = relativeTo ? entrySignedAt({ signedAt: relativeTo }) : new Date()
+  if (!rel) return '—'
   const diffMs = Math.abs(rel - d)
   const diffMins = Math.floor(diffMs / 60000)
   if (diffMins < 60) return `${diffMins}m`
@@ -363,11 +373,11 @@ function timeSince(date, relativeTo) {
 }
 
 function getVelocity(journey) {
-  if (journey.entries.length < 2) return null
-  const first = new Date(journey.entries[journey.entries.length - 1].signedAt)
-  const latest = new Date(journey.latestAt)
+  const first = entrySignedAt(journey.entries[journey.entries.length - 1])
+  const latest = entrySignedAt({ signedAt: journey.latestAt })
+  if (!first || !latest) return null
   const diff = Math.floor((latest - first) / (1000 * 60 * 60 * 24))
-  if (diff === 0) return 'Processing'
+  if (diff <= 0) return null
   return `${diff} day turn-around`
 }
 
@@ -383,13 +393,11 @@ function mapLogEntry(entry, index) {
   return {
     id: entry.id,
     requisitionId: entry.requisitionId,
-    rfControlNo: entry.rfControlNo ?? entry.requisitionId ?? 'â€”',
-    purpose:
-      (entry.purpose ?? '').slice(0, 50) + ((entry.purpose ?? '').length > 50 ? 'â€¦' : '') ||
-      'â€”',
+    rfControlNo: entry.rfControlNo ?? entry.requisitionId ?? '—',
+    purpose: entry.purpose || '—',
     action: entry.action,
     step: entry.step ?? '',
-    name: entry.name ?? 'â€”',
+    name: entry.name ?? '—',
     title: entry.title ?? '',
     email: entry.email ?? '',
     purchaseStatus: entry.purchaseStatus ?? '',
@@ -415,7 +423,7 @@ const UI_ROLE_LABELS = {
 }
 
 function statusText(code) {
-  return statusLabel[code] || code || 'â€”'
+  return statusLabel[code] || code || '—'
 }
 
 function stepLabel(entry) {
@@ -472,7 +480,7 @@ async function loadMore() {
 }
 
 function formatDate(val) {
-  if (!val) return 'â€”'
+  if (!val) return '—'
   const d = val?.toDate ? val.toDate() : new Date(val)
   return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
 }
@@ -499,32 +507,26 @@ function buildAndDownloadLogCsv(entries) {
     'Action',
     'By',
     'Email',
-    'Status (from â†’ to)',
+    'Status (from → to)',
     'Date & time',
     'Remarks',
   ]
   const rows = entries.map((e) => {
     const from = statusText(e.statusBefore)
     const to = statusText(e.statusAfter)
-    const statusChange = `${from} -> ${to}`
-    const purchase =
-      (
-        e.purchaseStatus ||
-        requisitionStatusMap.value[e.requisitionId]?.purchaseStatus ||
-        ''
-      ).replace(/^./, (c) => c.toUpperCase()) || 'â€”'
+    const statusChange = `${from} → ${to}`
     return [
       whatHappened(e),
-      e.rfControlNo ?? 'â€”',
-      (e.purpose ?? 'â€”').replace(/\s+/g, ' ').trim(),
+      e.rfControlNo ?? '—',
+      (e.purpose ?? '—').replace(/\s+/g, ' ').trim(),
       purchase,
       stepLabel(e.step),
       badgeText(e),
-      e.name ?? 'â€”',
-      e.email ?? 'â€”',
+      e.name ?? '—',
+      e.email ?? '—',
       statusChange,
       formatDate(e.signedAt),
-      (e.remarks ?? 'â€”').replace(/\s+/g, ' ').trim(),
+      (e.remarks ?? '—').replace(/\s+/g, ' ').trim(),
     ]
   })
   const header = cols.map(csvEscape).join(',')
@@ -882,11 +884,11 @@ onMounted(load)
               <table class="data-table">
                 <thead>
                   <tr class="glass-header">
-                    <th style="width: 140px">RF Number</th>
-                    <th style="width: 180px">Latest Action</th>
+                    <th style="width: 120px">RF Number</th>
+                    <th style="width: 160px">Latest Action</th>
                     <th class="purpose-header" style="text-align: left">Purpose</th>
-                    <th style="width: 220px; text-align: center">Workflow Progress</th>
-                    <th style="width: 160px; text-align: right">Date & Time</th>
+                    <th style="width: 200px; text-align: center">Workflow Progress</th>
+                    <th style="width: 150px; text-align: right">Date & Time</th>
                     <th style="width: 50px"></th>
                   </tr>
                 </thead>
@@ -902,15 +904,8 @@ onMounted(load)
                     >
                       <td class="rf-cell" @click.stop="goToDetail(journey.requisitionId)">
                         <span class="rf-number">{{ journey.rfControlNo }}</span>
-                        <span
-                          class="velocity-tag"
-                          v-if="getVelocity(journey) && getVelocity(journey) !== 'Processing'"
+                        <span class="velocity-tag" v-if="getVelocity(journey)"
                           >{{ getVelocity(journey).split(' ')[0] }}d</span
-                        >
-                        <span
-                          class="velocity-tag processing"
-                          v-else-if="getVelocity(journey) === 'Processing'"
-                          >Today</span
                         >
                       </td>
                       <td class="action-cell">
@@ -918,7 +913,9 @@ onMounted(load)
                           {{ badgeText(journey.entries[0]) }}
                         </span>
                       </td>
-                      <td class="purpose-cell">{{ journey.purpose || '—' }}</td>
+                      <td class="purpose-cell" :title="journey.purpose">
+                        {{ journey.purpose || '—' }}
+                      </td>
                       <td class="trail-cell">
                         <div class="mini-trail">
                           <div
@@ -1402,10 +1399,13 @@ onMounted(load)
 
 .purpose-cell {
   color: #6b7280;
-  max-width: 300px;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* Mini Trail */

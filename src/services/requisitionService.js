@@ -20,6 +20,7 @@ import {
   getCountFromServer,
 } from 'firebase/firestore'
 import { db } from '../firebase'
+import * as notificationService from './notificationService'
 
 /** Default page size for list views (keeps reads and UI responsive with many users/requests). */
 export const REQUISITION_PAGE_SIZE = 50
@@ -143,6 +144,25 @@ export function unsubscribeAllSubscriptions() {
   activeUnsubscribers.clear()
 }
 
+/**
+ * Finds users with a specific role and returns their email addresses.
+ * Used for routing notifications.
+ */
+async function getEmailsByRole(role) {
+  try {
+    const q = query(
+      collection(db, COLLECTIONS.USERS),
+      where('role', '==', role),
+      where('isActive', '==', true),
+    )
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => d.data().email).filter((e) => !!e)
+  } catch (error) {
+    console.error(`[getEmailsByRole] Error fetching for role ${role}:`, error)
+    return []
+  }
+}
+
 export { REQUISITION_STATUS }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +223,7 @@ export async function seedAnalyticsSummary() {
       rejectedPct: 0,
       avgLeadTimeDays: '—',
       totalApprovedValue: 0,
+      avgOrderValue: 0,
     },
     lastUpdated: serverTimestamp(),
   }
@@ -234,12 +255,28 @@ export async function seedAnalyticsSummary() {
 
     if (monthKey) {
       if (!summary.byMonth[monthKey]) {
-        summary.byMonth[monthKey] = { count: 0, value: 0, approved: 0, rejected: 0 }
+        summary.byMonth[monthKey] = {
+          count: 0,
+          value: 0,
+          approved: 0,
+          rejected: 0,
+          leadTimeMs: 0,
+          leadTimeCount: 0,
+          byStatus: {},
+          byDepartment: {},
+          poByStatus: {},
+          durations: {},
+          purchaseBreakdown: { pending: 0, ordered: 0, received: 0 },
+          departmentalSpend: {},
+        }
       }
       summary.byMonth[monthKey].count++
+      summary.byMonth[monthKey].byStatus[s] = (summary.byMonth[monthKey].byStatus[s] || 0) + 1
+      summary.byMonth[monthKey].byDepartment[dept] =
+        (summary.byMonth[monthKey].byDepartment[dept] || 0) + 1
     }
 
-    const archDate = toDate(r.archivedAt)
+    const archDate = toDate(r.archivedAt || r.approvedAt)
     const archMonthKey =
       archDate && !Number.isNaN(archDate.getTime())
         ? `${archDate.getFullYear()}-${String(archDate.getMonth() + 1).padStart(2, '0')}`
@@ -254,33 +291,83 @@ export async function seedAnalyticsSummary() {
       )
       summary.totalApprovedValue += val
       summary.departmentalSpend[dept] = (summary.departmentalSpend[dept] || 0) + val
-      if (monthKey) summary.byMonth[monthKey].value += val
+      // Burn (value) should be mapped to the ARCHIVE month (when it was approved/spent)
+      if (archMonthKey) {
+        if (!summary.byMonth[archMonthKey]) {
+          summary.byMonth[archMonthKey] = {
+            count: 0,
+            value: 0,
+            approved: 0,
+            rejected: 0,
+            leadTimeMs: 0,
+            leadTimeCount: 0,
+            byStatus: {},
+            byDepartment: {},
+            poByStatus: {},
+            durations: {},
+            purchaseBreakdown: { pending: 0, ordered: 0, received: 0 },
+            departmentalSpend: {},
+          }
+        }
+        summary.byMonth[archMonthKey].value += val
+        summary.byMonth[archMonthKey].departmentalSpend[dept] =
+          (summary.byMonth[archMonthKey].departmentalSpend[dept] || 0) + val
+      }
     }
 
     // Global status buckets
     if (s === REQUISITION_STATUS.APPROVED) {
       totalApprovedCount++
-      if (monthKey === thisMonthKey) summary.summary.approvedThisMonth++
+      // Use archMonthKey for summary approved this month
+      if (archMonthKey === thisMonthKey) summary.summary.approvedThisMonth++
       if (archMonthKey) {
         if (!summary.byMonth[archMonthKey]) {
-          summary.byMonth[archMonthKey] = { count: 0, value: 0, approved: 0, rejected: 0 }
+          summary.byMonth[archMonthKey] = {
+            count: 0,
+            value: 0,
+            approved: 0,
+            rejected: 0,
+            leadTimeMs: 0,
+            leadTimeCount: 0,
+          }
         }
         summary.byMonth[archMonthKey].approved++
       }
 
       const ps = r.purchaseStatus || PURCHASE_STATUS.PENDING
       summary.purchaseBreakdown[ps] = (summary.purchaseBreakdown[ps] || 0) + 1
+      if (archMonthKey) {
+        if (!summary.byMonth[archMonthKey].purchaseBreakdown) {
+          summary.byMonth[archMonthKey].purchaseBreakdown = { pending: 0, ordered: 0, received: 0 }
+        }
+        summary.byMonth[archMonthKey].purchaseBreakdown[ps] =
+          (summary.byMonth[archMonthKey].purchaseBreakdown[ps] || 0) + 1
+      }
 
       const pos = r.poStatus || null
       if (pos) {
         summary.poByStatus[pos] = (summary.poByStatus[pos] || 0) + 1
+        if (archMonthKey) {
+          if (!summary.byMonth[archMonthKey].poByStatus)
+            summary.byMonth[archMonthKey].poByStatus = {}
+          summary.byMonth[archMonthKey].poByStatus[pos] =
+            (summary.byMonth[archMonthKey].poByStatus[pos] || 0) + 1
+        }
       }
     } else if (s === REQUISITION_STATUS.REJECTED) {
       totalRejectedCount++
-      if (monthKey === thisMonthKey) summary.summary.rejectedThisMonth++
+      // Use archMonthKey for summary rejected this month
+      if (archMonthKey === thisMonthKey) summary.summary.rejectedThisMonth++
       if (archMonthKey) {
         if (!summary.byMonth[archMonthKey]) {
-          summary.byMonth[archMonthKey] = { count: 0, value: 0, approved: 0, rejected: 0 }
+          summary.byMonth[archMonthKey] = {
+            count: 0,
+            value: 0,
+            approved: 0,
+            rejected: 0,
+            leadTimeMs: 0,
+            leadTimeCount: 0,
+          }
         }
         summary.byMonth[archMonthKey].rejected++
       }
@@ -290,14 +377,36 @@ export async function seedAnalyticsSummary() {
 
     // Lead Time calculation (Submission to Archive/End)
     const created = toDate(r.createdAt || r.date)
-    const endAt = toDate(r.archivedAt || r.receivedAt || r.approvedAt)
-    if (
-      created &&
-      endAt &&
-      (s === REQUISITION_STATUS.APPROVED || s === REQUISITION_STATUS.REJECTED)
-    ) {
-      totalLeadTimeMs += Math.max(0, endAt - created)
-      leadTimeCount++
+    const endAt = archDate
+    if (created) {
+      if (endAt && (s === REQUISITION_STATUS.APPROVED || s === REQUISITION_STATUS.REJECTED)) {
+        const diff = Math.max(0, endAt - created)
+        totalLeadTimeMs += diff
+        leadTimeCount++
+        if (archMonthKey) {
+          if (!summary.byMonth[archMonthKey]) {
+            summary.byMonth[archMonthKey] = {
+              count: 0,
+              value: 0,
+              approved: 0,
+              rejected: 0,
+              leadTimeMs: 0,
+              leadTimeCount: 0,
+            }
+          }
+          summary.byMonth[archMonthKey].leadTimeMs += diff
+          summary.byMonth[archMonthKey].leadTimeCount++
+        }
+      } else if (s !== REQUISITION_STATUS.DRAFT) {
+        // Real-time aging for active items
+        const diff = Math.max(0, now - created)
+        totalLeadTimeMs += diff
+        leadTimeCount++
+        if (monthKey) {
+          summary.byMonth[monthKey].leadTimeMs += diff
+          summary.byMonth[monthKey].leadTimeCount++
+        }
+      }
     }
 
     // Durations (Simple seeding for velocity)
@@ -347,10 +456,76 @@ export async function seedAnalyticsSummary() {
           : new Date(stage.start)
         : null
       const end = stage.end ? (stage.end.toDate ? stage.end.toDate() : new Date(stage.end)) : null
-      if (start && end && !isNaN(start) && !isNaN(end)) {
-        if (!summary.durations[stage.key]) summary.durations[stage.key] = { totalMs: 0, count: 0 }
-        summary.durations[stage.key].totalMs += end - start
+
+      if (!summary.durations[stage.key]) {
+        summary.durations[stage.key] = { totalMs: 0, count: 0, activeTotalMs: 0, activeCount: 0 }
+      }
+
+      if (start && end && !isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        summary.durations[stage.key].totalMs += Math.max(0, end - start)
         summary.durations[stage.key].count++
+        if (monthKey) {
+          if (!summary.byMonth[monthKey].durations[stage.key]) {
+            summary.byMonth[monthKey].durations[stage.key] = { totalMs: 0, count: 0 }
+          }
+          summary.byMonth[monthKey].durations[stage.key].totalMs += Math.max(0, end - start)
+          summary.byMonth[monthKey].durations[stage.key].count++
+        }
+      } else if (start && !end && !isNaN(start.getTime())) {
+        // Active item logic
+        // Check if this item is currently in this stage
+        let isInThisStage = false
+        if (
+          stage.key === 'submission_to_recommend' &&
+          s === REQUISITION_STATUS.PENDING_RECOMMENDATION
+        )
+          isInThisStage = true
+        else if (
+          stage.key === 'recommend_to_inventory' &&
+          s === REQUISITION_STATUS.PENDING_INVENTORY
+        )
+          isInThisStage = true
+        else if (stage.key === 'inventory_to_budget' && s === REQUISITION_STATUS.PENDING_BUDGET)
+          isInThisStage = true
+        else if (stage.key === 'budget_to_audit' && s === REQUISITION_STATUS.PENDING_AUDIT)
+          isInThisStage = true
+        else if (stage.key === 'audit_to_gm' && s === REQUISITION_STATUS.PENDING_APPROVAL)
+          isInThisStage = true
+        else if (
+          stage.key === 'gm_to_fulfillment' &&
+          s === REQUISITION_STATUS.APPROVED &&
+          (r.purchaseStatus || PURCHASE_STATUS.PENDING) === PURCHASE_STATUS.PENDING
+        )
+          isInThisStage = true
+        else if (
+          stage.key === 'req_appr_to_po_issue' &&
+          s === REQUISITION_STATUS.APPROVED &&
+          !r.poStatus
+        )
+          isInThisStage = true
+        else if (stage.key === 'po_issue_to_po_budget' && r.poStatus === PO_STATUS.PENDING_BUDGET)
+          isInThisStage = true
+        else if (stage.key === 'po_budget_to_po_audit' && r.poStatus === PO_STATUS.PENDING_AUDIT)
+          isInThisStage = true
+        else if (stage.key === 'po_audit_to_po_gm' && r.poStatus === PO_STATUS.PENDING_GM)
+          isInThisStage = true
+
+        if (isInThisStage) {
+          summary.durations[stage.key].activeTotalMs += Math.max(0, now - start)
+          summary.durations[stage.key].activeCount++
+          if (monthKey) {
+            if (!summary.byMonth[monthKey].durations[stage.key]) {
+              summary.byMonth[monthKey].durations[stage.key] = {
+                totalMs: 0,
+                count: 0,
+                activeTotalMs: 0,
+                activeCount: 0,
+              }
+            }
+            summary.byMonth[monthKey].durations[stage.key].activeTotalMs += Math.max(0, now - start)
+            summary.byMonth[monthKey].durations[stage.key].activeCount++
+          }
+        }
       }
     })
   })
@@ -364,6 +539,8 @@ export async function seedAnalyticsSummary() {
   summary.summary.totalApprovedValue = summary.totalApprovedValue
   summary.summary.avgLeadTimeDays =
     leadTimeCount > 0 ? (totalLeadTimeMs / leadTimeCount / (1000 * 60 * 60 * 24)).toFixed(1) : '—'
+  summary.summary.avgOrderValue =
+    totalApprovedCount > 0 ? summary.totalApprovedValue / totalApprovedCount : 0
 
   const ref = doc(db, COLLECTIONS.ANALYTICS, ANALYTICS_SUMMARY_ID)
   await setDoc(ref, summary)
@@ -570,6 +747,35 @@ export async function getRequisition(id) {
 }
 
 /**
+ * Helper to ensure a requisition has the requestor's email
+ * (Fallback for older documents that only stored userId/name)
+ */
+async function ensureRequestorEmail(requisition) {
+  if (!requisition) return requisition
+  if (requisition.requestedBy?.email) return requisition
+
+  const userId = requisition.requestedBy?.userId
+  if (!userId) return requisition
+
+  try {
+    const userRef = doc(db, COLLECTIONS.USERS, userId)
+    const userSnap = await getDoc(userRef)
+    if (userSnap.exists()) {
+      const userData = userSnap.data()
+      if (userData.email) {
+        requisition.requestedBy = {
+          ...requisition.requestedBy,
+          email: userData.email,
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[RequisitionService] Could not hydrate requestor email:', e)
+  }
+  return requisition
+}
+
+/**
  * Update a requisition
  */
 export async function updateRequisition(id, data) {
@@ -718,6 +924,16 @@ export async function approvePOBudget(requisitionId, user, signatureData) {
         purpose: (current.purpose ?? '').slice(0, 200),
       },
     )
+
+    // Notification: Notify Internal Auditor for PO Review
+    try {
+      const auditorEmails = await getEmailsByRole(USER_ROLES.INTERNAL_AUDITOR)
+      if (auditorEmails.length > 0) {
+        notificationService.notifyPOAction(current, 'Internal Audit', auditorEmails[0])
+      }
+    } catch (e) {
+      console.error('PO Budget approval notification error:', e)
+    }
   }
 }
 
@@ -774,6 +990,16 @@ export async function approvePOAudit(requisitionId, user, signatureData) {
         purpose: (current.purpose ?? '').slice(0, 200),
       },
     )
+
+    // Notification: Notify GM for PO Review
+    try {
+      const gmEmails = await getEmailsByRole(USER_ROLES.GENERAL_MANAGER)
+      if (gmEmails.length > 0) {
+        notificationService.notifyPOAction(current, 'General Manager', gmEmails[0])
+      }
+    } catch (e) {
+      console.error('PO Audit approval notification error:', e)
+    }
   }
 }
 
@@ -832,6 +1058,17 @@ export async function approvePOGM(requisitionId, user, signatureData) {
         purpose: (current.purpose ?? '').slice(0, 200),
       },
     )
+
+    // Notification: Notify BAC Secretary (Ready to Print) and Requestor
+    try {
+      const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
+      if (bacEmails.length > 0) {
+        notificationService.notifyPOAction(current, 'BAC Secretary', bacEmails[0])
+      }
+      notificationService.notifyRequestorUpdate(current, 'PO approved')
+    } catch (e) {
+      console.error('PO GM approval notification error:', e)
+    }
   }
 }
 
@@ -877,6 +1114,16 @@ export async function rejectPO(requisitionId, user, { remarks, step }) {
         purpose: (current.purpose ?? '').slice(0, 200),
       },
     )
+
+    // Notification: Notify BAC Secretary of PO Rejection
+    try {
+      const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
+      if (bacEmails.length > 0) {
+        notificationService.notifyPOAction(current, 'Correction Needed', bacEmails[0])
+      }
+    } catch (e) {
+      console.error('PO rejection notification error:', e)
+    }
   }
 }
 
@@ -986,6 +1233,16 @@ export async function submitRequisitionToBAC(requisitionId, { submittedBy }) {
     },
     snapshot,
   )
+
+  // Notification: Notify BAC Secretary
+  try {
+    const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
+    if (bacEmails.length > 0) {
+      notificationService.notifyBACNewCanvass(current)
+    }
+  } catch (e) {
+    console.error('BAC submission notification error:', e)
+  }
 
   return getRequisition(requisitionId)
 }
@@ -1526,12 +1783,16 @@ export function computeAnalyticsFromLists(
   const highValueReqs = []
 
   const stageVelocity = {
-    submission_to_recommend: { total: 0, count: 0 },
-    recommend_to_inventory: { total: 0, count: 0 },
-    inventory_to_budget: { total: 0, count: 0 },
-    budget_to_audit: { total: 0, count: 0 },
-    audit_to_gm: { total: 0, count: 0 },
-    gm_to_fulfillment: { total: 0, count: 0 },
+    submission_to_recommend: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    recommend_to_inventory: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    inventory_to_budget: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    budget_to_audit: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    audit_to_gm: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    gm_to_fulfillment: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    req_appr_to_po_issue: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    po_issue_to_po_budget: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    po_budget_to_po_audit: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
+    po_audit_to_po_gm: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
   }
 
   approvedInRangeFull.forEach((r) => {
@@ -1613,31 +1874,24 @@ export function computeAnalyticsFromLists(
     // New PO Phase Velocity
     if (t5 && tp0) {
       // Req Approved -> PO First Issued
-      if (!stageVelocity.req_appr_to_po_issue)
-        stageVelocity.req_appr_to_po_issue = { total: 0, count: 0 }
       stageVelocity.req_appr_to_po_issue.total += Math.max(0, tp0 - t5)
       stageVelocity.req_appr_to_po_issue.count++
     }
     if (tp0 && tp1) {
-      if (!stageVelocity.po_issue_to_po_budget)
-        stageVelocity.po_issue_to_po_budget = { total: 0, count: 0 }
       stageVelocity.po_issue_to_po_budget.total += Math.max(0, tp1 - tp0)
       stageVelocity.po_issue_to_po_budget.count++
     }
     if (tp1 && tp2) {
-      if (!stageVelocity.po_budget_to_po_audit)
-        stageVelocity.po_budget_to_po_audit = { total: 0, count: 0 }
       stageVelocity.po_budget_to_po_audit.total += Math.max(0, tp2 - tp1)
       stageVelocity.po_budget_to_po_audit.count++
     }
     if (tp2 && tp3) {
-      if (!stageVelocity.po_audit_to_po_gm) stageVelocity.po_audit_to_po_gm = { total: 0, count: 0 }
       stageVelocity.po_audit_to_po_gm.total += Math.max(0, tp3 - tp2)
       stageVelocity.po_audit_to_po_gm.count++
     }
   })
 
-  // Also factor rejected into Lead Time (Submission -> Rejection)
+  // Factor rejected into Lead Time (Submission -> Rejection)
   rejectedInRangeFull.forEach((r) => {
     const created = toDate(r.createdAt || r.date)
     const archived = toDate(r.archivedAt)
@@ -1647,12 +1901,96 @@ export function computeAnalyticsFromLists(
     }
   })
 
+  // --- START ACTIVE AGING LOGIC ---
+  activeInRange.forEach((r) => {
+    // Lead Time Aging (Real-time)
+    const createdForLT = toDate(r.createdAt || r.date)
+    const archivedForLT = toDate(r.archivedAt)
+    if (createdForLT && !archivedForLT) {
+      totalLeadTimeMs += Math.max(0, now - createdForLT)
+      leadTimeCount++
+    }
+
+    // REQUISITION Stages
+    if (r.status === REQUISITION_STATUS.PENDING_RECOMMENDATION) {
+      const entry = toDate(r.createdAt || r.date)
+      if (entry) {
+        stageVelocity.submission_to_recommend.activeTotal += Math.max(0, now - entry)
+        stageVelocity.submission_to_recommend.activeCount++
+      }
+    } else if (r.status === REQUISITION_STATUS.PENDING_INVENTORY) {
+      const entry = toDate(r.recommendingApproval?.signedAt)
+      if (entry) {
+        stageVelocity.recommend_to_inventory.activeTotal += Math.max(0, now - entry)
+        stageVelocity.recommend_to_inventory.activeCount++
+      }
+    } else if (r.status === REQUISITION_STATUS.PENDING_BUDGET) {
+      const entry = toDate(r.inventoryChecked?.signedAt)
+      if (entry) {
+        stageVelocity.inventory_to_budget.activeTotal += Math.max(0, now - entry)
+        stageVelocity.inventory_to_budget.activeCount++
+      }
+    } else if (r.status === REQUISITION_STATUS.PENDING_AUDIT) {
+      const entry = toDate(r.budgetApproved?.signedAt)
+      if (entry) {
+        stageVelocity.budget_to_audit.activeTotal += Math.max(0, now - entry)
+        stageVelocity.budget_to_audit.activeCount++
+      }
+    } else if (r.status === REQUISITION_STATUS.PENDING_APPROVAL) {
+      const entry = toDate(r.checkedBy?.signedAt)
+      if (entry) {
+        stageVelocity.audit_to_gm.activeTotal += Math.max(0, now - entry)
+        stageVelocity.audit_to_gm.activeCount++
+      }
+    } else if (
+      r.status === REQUISITION_STATUS.APPROVED &&
+      (r.purchaseStatus || PURCHASE_STATUS.PENDING) === PURCHASE_STATUS.PENDING
+    ) {
+      const entry = toDate(r.approvedBy?.signedAt)
+      if (entry) {
+        stageVelocity.gm_to_fulfillment.activeTotal += Math.max(0, now - entry)
+        stageVelocity.gm_to_fulfillment.activeCount++
+      }
+    }
+
+    // PO Stages
+    if (r.status === REQUISITION_STATUS.APPROVED && !r.poStatus) {
+      const entry = toDate(r.approvedBy?.signedAt)
+      if (entry) {
+        stageVelocity.req_appr_to_po_issue.activeTotal += Math.max(0, now - entry)
+        stageVelocity.req_appr_to_po_issue.activeCount++
+      }
+    } else if (r.poStatus === PO_STATUS.PENDING_BUDGET) {
+      const entry = r.orderedAt ? toDate(r.orderedAt) : null
+      if (entry) {
+        stageVelocity.po_issue_to_po_budget.activeTotal += Math.max(0, now - entry)
+        stageVelocity.po_issue_to_po_budget.activeCount++
+      }
+    } else if (r.poStatus === PO_STATUS.PENDING_AUDIT) {
+      const entry = toDate(r.poBudgetApproved?.signedAt)
+      if (entry) {
+        stageVelocity.po_budget_to_po_audit.activeTotal += Math.max(0, now - entry)
+        stageVelocity.po_budget_to_po_audit.activeCount++
+      }
+    } else if (r.poStatus === PO_STATUS.PENDING_GM) {
+      const entry = toDate(r.poAuditApproved?.signedAt)
+      if (entry) {
+        stageVelocity.po_audit_to_po_gm.activeTotal += Math.max(0, now - entry)
+        stageVelocity.po_audit_to_po_gm.activeCount++
+      }
+    }
+  })
+  // --- END ACTIVE AGING LOGIC ---
+
   const avgLeadTimeDays =
     leadTimeCount > 0 ? (totalLeadTimeMs / leadTimeCount / (1000 * 60 * 60 * 24)).toFixed(1) : '—'
 
   const bottlenecks = Object.entries(stageVelocity).map(([stage, v]) => ({
     stage,
     avgDays: v.count > 0 ? (v.total / v.count / (1000 * 60 * 60 * 24)).toFixed(2) : 0,
+    activeCount: v.activeCount || 0,
+    activeAvgDays:
+      v.activeCount > 0 ? (v.activeTotal / v.activeCount / (1000 * 60 * 60 * 24)).toFixed(2) : 0,
   }))
 
   const avgOrderValue = approvedCount > 0 ? totalApprovedValue / approvedCount : 0
@@ -1736,10 +2074,29 @@ export function computeAnalyticsFromLists(
  * Optional requestedBy (e.g. with signatureUrl) is applied when the requestor submits.
  */
 export async function submitRequisition(id, updates = {}) {
-  return updateRequisition(id, {
+  const res = await updateRequisition(id, {
     status: REQUISITION_STATUS.PENDING_RECOMMENDATION,
     ...updates,
   })
+
+  // Notification: Notify Section Head and Requestor (Receipt)
+  try {
+    let req = await getRequisition(id)
+    req = await ensureRequestorEmail(req)
+
+    // 1. Receipt to Requestor
+    await notificationService.notifySubmissionReceipt(req)
+
+    // 2. Alert to Next Approver (Section Head)
+    const emails = await getEmailsByRole(USER_ROLES.SECTION_HEAD)
+    if (emails.length > 0) {
+      await notificationService.notifyNextApprover(req, 'Section Head', emails[0])
+    }
+  } catch (e) {
+    console.error('Submission notification error:', e)
+  }
+
+  return res
 }
 
 /**
@@ -1933,6 +2290,34 @@ export async function approveRequisition(id, approver, role) {
     snapshot,
   )
 
+  // Notifications logic
+  try {
+    const reqWithEmail = await ensureRequestorEmail(current)
+    const nextWorkflow = Object.entries(APPROVAL_WORKFLOW).find(
+      ([, w]) => w.canApproveStatus === workflow.nextStatus,
+    )
+
+    if (nextWorkflow) {
+      const [nextRole] = nextWorkflow
+      const nextEmails = await getEmailsByRole(nextRole)
+      if (nextEmails.length > 0) {
+        await notificationService.notifyNextApprover(reqWithEmail, nextRole, nextEmails[0])
+      }
+      // Step-by-Step Notification: Inform requestor it moved to the next role
+      await notificationService.notifyRequestorUpdate(reqWithEmail, 'Step Approved', '', nextRole)
+    } else if (workflow.nextStatus === REQUISITION_STATUS.APPROVED) {
+      // Final Approval
+      await notificationService.notifyRequestorUpdate(reqWithEmail, 'approved')
+      // Notify Purchaser
+      const purchaserEmails = await getEmailsByRole(USER_ROLES.PURCHASER)
+      if (purchaserEmails.length > 0) {
+        await notificationService.notifyNextApprover(reqWithEmail, 'Purchaser', purchaserEmails[0])
+      }
+    }
+  } catch (e) {
+    console.error('Approval notification error:', e)
+  }
+
   return getRequisition(id)
 }
 
@@ -2005,6 +2390,15 @@ export async function declineRequisition(id, approver, remarks, role) {
     },
     snapshot,
   )
+
+  // Notification: Notify Requestor of Rejection
+  try {
+    console.log('[RequisitionService] Attempting to notify requestor of rejection:', id)
+    const reqWithEmail = await ensureRequestorEmail(current)
+    await notificationService.notifyRequestorUpdate(reqWithEmail, 'rejected', remarks)
+  } catch (e) {
+    console.error('Rejection notification error:', e)
+  }
 
   return getRequisition(id)
 }

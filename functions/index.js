@@ -8,8 +8,17 @@ const db = admin.firestore()
 const COLLECTIONS = {
   REQUISITIONS: 'requisitions',
   ANALYTICS: 'analytics',
+  VERIFY_OTPS: 'verify_otps',
 }
 const SUMMARY_DOC_ID = 'summary'
+
+const sgMail = require('@sendgrid/mail')
+// NOTE: Set the SENDGRID_API_KEY using: firebase functions:config:set sendgrid.key="YOUR_KEY"
+// or use process.env if using newer V2 secret management.
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || ''
+if (SENDGRID_API_KEY) {
+  sgMail.setApiKey(SENDGRID_API_KEY)
+}
 
 /**
  * Incremental analytics aggregator.

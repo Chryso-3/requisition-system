@@ -525,9 +525,8 @@ onUnmounted(() => {
                   <td class="font-medium">{{ r.rfControlNo || '—' }}</td>
                   <td>{{ formatDate(r.date) }}</td>
                   <td>{{ getDeptAbbreviation(r.department) }}</td>
-                  <td class="purpose-cell">
-                    {{ (r.purpose || '').slice(0, 30)
-                    }}{{ (r.purpose || '').length > 30 ? '…' : '' }}
+                  <td class="purpose-cell" :title="r.purpose">
+                    {{ r.purpose || '—' }}
                   </td>
                   <td>
                     <span :class="['status-badge', r.status]">{{
@@ -897,6 +896,16 @@ onUnmounted(() => {
 .font-medium {
   font-weight: 700;
   color: #0f172a;
+}
+
+.purpose-cell {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* Status Badges */

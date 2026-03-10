@@ -150,13 +150,16 @@ export function unsubscribeAllSubscriptions() {
  */
 async function getEmailsByRole(role) {
   try {
-    const q = query(
-      collection(db, COLLECTIONS.USERS),
-      where('role', '==', role),
-      where('isActive', '==', true),
-    )
+    const q = query(collection(db, COLLECTIONS.USERS), where('role', '==', role))
     const snap = await getDocs(q)
-    return snap.docs.map((d) => d.data().email).filter((e) => !!e)
+
+    // In Firestore, if a field is undefined, simple where() queries exclude the document.
+    // The UI treats users as active unless isActive is explicitly false.
+    return snap.docs
+      .map((d) => d.data())
+      .filter((data) => data.isActive !== false) // Filter JS-side so undefined is treated as active
+      .map((data) => data.email)
+      .filter((e) => !!e)
   } catch (error) {
     console.error(`[getEmailsByRole] Error fetching for role ${role}:`, error)
     return []
@@ -929,7 +932,7 @@ export async function approvePOBudget(requisitionId, user, signatureData) {
     try {
       const auditorEmails = await getEmailsByRole(USER_ROLES.INTERNAL_AUDITOR)
       if (auditorEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'Internal Audit', auditorEmails[0])
+        notificationService.notifyPOAction(current, 'Internal Audit', auditorEmails)
       }
     } catch (e) {
       console.error('PO Budget approval notification error:', e)
@@ -995,7 +998,7 @@ export async function approvePOAudit(requisitionId, user, signatureData) {
     try {
       const gmEmails = await getEmailsByRole(USER_ROLES.GENERAL_MANAGER)
       if (gmEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'General Manager', gmEmails[0])
+        notificationService.notifyPOAction(current, 'General Manager', gmEmails)
       }
     } catch (e) {
       console.error('PO Audit approval notification error:', e)
@@ -1063,7 +1066,7 @@ export async function approvePOGM(requisitionId, user, signatureData) {
     try {
       const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
       if (bacEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'BAC Secretary', bacEmails[0])
+        notificationService.notifyPOAction(current, 'BAC Secretary', bacEmails)
       }
       notificationService.notifyRequestorUpdate(current, 'PO approved')
     } catch (e) {
@@ -1119,7 +1122,7 @@ export async function rejectPO(requisitionId, user, { remarks, step }) {
     try {
       const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
       if (bacEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'Correction Needed', bacEmails[0])
+        notificationService.notifyPOAction(current, 'Correction Needed', bacEmails)
       }
     } catch (e) {
       console.error('PO rejection notification error:', e)
@@ -2090,7 +2093,7 @@ export async function submitRequisition(id, updates = {}) {
     // 2. Alert to Next Approver (Section Head)
     const emails = await getEmailsByRole(USER_ROLES.SECTION_HEAD)
     if (emails.length > 0) {
-      await notificationService.notifyNextApprover(req, 'Section Head', emails[0])
+      await notificationService.notifyNextApprover(req, 'Section Head', emails)
     }
   } catch (e) {
     console.error('Submission notification error:', e)
@@ -2216,6 +2219,13 @@ export async function approveRequisition(id, approver, role) {
   if (!workflow) throw new Error('Invalid approver role')
 
   const current = await getRequisition(id)
+
+  // First-to-Action Validation: Check if the requisition was already approved by a colleague
+  if (current.status !== workflow.canApproveStatus) {
+    throw new Error(
+      `This requisition is no longer pending your approval. It is currently at: ${current.status}. It may have already been processed by a colleague.`,
+    )
+  }
   const signedAt = new Date().toISOString()
 
   const updateData = {
@@ -2301,7 +2311,7 @@ export async function approveRequisition(id, approver, role) {
       const [nextRole] = nextWorkflow
       const nextEmails = await getEmailsByRole(nextRole)
       if (nextEmails.length > 0) {
-        await notificationService.notifyNextApprover(reqWithEmail, nextRole, nextEmails[0])
+        await notificationService.notifyNextApprover(reqWithEmail, nextRole, nextEmails)
       }
       // Step-by-Step Notification: Inform requestor it moved to the next role
       await notificationService.notifyRequestorUpdate(reqWithEmail, 'Step Approved', '', nextRole)
@@ -2311,7 +2321,7 @@ export async function approveRequisition(id, approver, role) {
       // Notify Purchaser
       const purchaserEmails = await getEmailsByRole(USER_ROLES.PURCHASER)
       if (purchaserEmails.length > 0) {
-        await notificationService.notifyNextApprover(reqWithEmail, 'Purchaser', purchaserEmails[0])
+        await notificationService.notifyNextApprover(reqWithEmail, 'Purchaser', purchaserEmails)
       }
     }
   } catch (e) {

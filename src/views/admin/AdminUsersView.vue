@@ -16,6 +16,7 @@ import {
 const users = ref([])
 const loading = ref(true)
 const searchQuery = ref('')
+const selectedRole = ref('all')
 const savingId = ref(null)
 
 const roleOptions = Object.entries(USER_ROLE_LABELS).map(([value, label]) => ({
@@ -24,9 +25,15 @@ const roleOptions = Object.entries(USER_ROLE_LABELS).map(([value, label]) => ({
 }))
 
 const filteredUsers = computed(() => {
-  if (!searchQuery.value) return users.value
+  let result = users.value
+
+  if (selectedRole.value !== 'all') {
+    result = result.filter((u) => u.role === selectedRole.value)
+  }
+
+  if (!searchQuery.value) return result
   const q = searchQuery.value.toLowerCase()
-  return users.value.filter(
+  return result.filter(
     (u) =>
       u.displayName?.toLowerCase().includes(q) ||
       u.email?.toLowerCase().includes(q) ||
@@ -91,6 +98,14 @@ onMounted(fetchUsers)
         <p class="page-subtitle">Manage system access, roles, and user status</p>
       </div>
       <div class="header-actions">
+        <div class="filter-wrapper">
+          <select v-model="selectedRole" class="elite-select filter-select">
+            <option value="all">All Roles</option>
+            <option v-for="opt in roleOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
         <div class="search-box">
           <Search :size="18" class="search-icon" />
           <input
@@ -117,10 +132,10 @@ onMounted(fetchUsers)
               <th class="col-role">System Role</th>
               <th class="col-status">Status</th>
               <th class="col-date">Registered On</th>
-              <th class="col-actions text-right">Actions</th>
+              <th class="col-actions text-left">Actions</th>
             </tr>
           </thead>
-          <transition-group name="list" tag="tbody">
+          <tbody>
             <tr
               v-for="user in filteredUsers"
               :key="user.uid"
@@ -163,8 +178,8 @@ onMounted(fetchUsers)
                   {{ formatDate(user.createdAt) }}
                 </div>
               </td>
-              <td class="col-actions text-right">
-                <div class="action-buttons elite-actions">
+              <td class="col-actions text-left">
+                <div class="action-buttons elite-actions justify-start">
                   <button
                     @click="toggleUserStatus(user)"
                     class="btn-elite"
@@ -177,7 +192,7 @@ onMounted(fetchUsers)
                 </div>
               </td>
             </tr>
-          </transition-group>
+          </tbody>
         </table>
 
         <div v-if="filteredUsers.length === 0" class="empty-state">
@@ -214,6 +229,21 @@ onMounted(fetchUsers)
 .page-subtitle {
   color: #64748b;
   margin: 0.25rem 0 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.filter-select {
+  padding: 0.6rem 2.5rem 0.6rem 1.2rem;
+  background-color: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(8px);
+  border-radius: 12px;
+  min-width: 180px;
+  font-weight: 500;
 }
 
 .search-box {
@@ -294,6 +324,7 @@ onMounted(fetchUsers)
 }
 .col-actions {
   width: 180px; /* Balanced actions width */
+  padding-right: 0 !important; /* Force flush right alignment */
 }
 
 .elite-table th {
@@ -425,6 +456,13 @@ onMounted(fetchUsers)
   font-weight: 500;
 }
 
+.action-buttons {
+  display: flex;
+  justify-content: flex-start; /* Left align buttons to match header and other columns */
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .btn-elite {
   display: inline-flex;
   align-items: center;
@@ -471,22 +509,7 @@ onMounted(fetchUsers)
   background: rgba(0, 0, 0, 0.2);
 }
 
-/* Fluid List Transitions */
-.list-move,
-.list-enter-active,
-.list-leave-active {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.list-enter-from,
-.list-leave-to {
-  opacity: 0;
-  transform: translateY(10px);
-}
-
-/*
-   Preserve table structure by avoiding absolute positioning on leave.
-*/
+/* No list animations — instant filtering for clean table UX */
 
 .loading-state {
   display: flex;

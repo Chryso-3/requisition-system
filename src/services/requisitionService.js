@@ -379,7 +379,14 @@ export async function seedAnalyticsSummary() {
     }
 
     // Lead Time calculation (Submission to Archive/End)
+    const createdRaw = r.createdAt?.toDate
+      ? r.createdAt.toDate()
+      : r.createdAt
+        ? new Date(r.createdAt)
+        : null
     const created = toDate(r.createdAt || r.date)
+    const fallbackStart = createdRaw || created || new Date()
+
     const endAt = archDate
     if (created) {
       if (endAt && (s === REQUISITION_STATUS.APPROVED || s === REQUISITION_STATUS.REJECTED)) {
@@ -416,38 +423,54 @@ export async function seedAnalyticsSummary() {
     const stages = [
       {
         key: 'submission_to_recommend',
-        start: r.requestedBy?.signedAt,
+        start: r.requestedBy?.signedAt || fallbackStart,
         end: r.recommendingApproval?.signedAt,
       },
       {
         key: 'recommend_to_inventory',
-        start: r.recommendingApproval?.signedAt,
+        start: r.recommendingApproval?.signedAt || r.requestedBy?.signedAt || fallbackStart,
         end: r.inventoryChecked?.signedAt,
       },
       {
         key: 'inventory_to_budget',
-        start: r.inventoryChecked?.signedAt,
+        start: r.inventoryChecked?.signedAt || r.recommendingApproval?.signedAt || fallbackStart,
         end: r.budgetApproved?.signedAt,
       },
-      { key: 'budget_to_audit', start: r.budgetApproved?.signedAt, end: r.checkedBy?.signedAt },
-      { key: 'audit_to_gm', start: r.checkedBy?.signedAt, end: r.approvedBy?.signedAt },
+      {
+        key: 'budget_to_audit',
+        start: r.budgetApproved?.signedAt || r.inventoryChecked?.signedAt || fallbackStart,
+        end: r.checkedBy?.signedAt,
+      },
+      {
+        key: 'audit_to_gm',
+        start: r.checkedBy?.signedAt || r.budgetApproved?.signedAt || fallbackStart,
+        end: r.approvedBy?.signedAt,
+      },
       {
         key: 'gm_to_fulfillment',
-        start: r.approvedBy?.signedAt,
+        start: r.approvedBy?.signedAt || r.checkedBy?.signedAt || fallbackStart,
         end: r.receivedAt || r.archivedAt,
       },
 
       // PO Approval Workflow Durations
-      { key: 'req_appr_to_po_issue', start: r.approvedBy?.signedAt, end: r.orderedAt },
-      { key: 'po_issue_to_po_budget', start: r.orderedAt, end: r.poBudgetApproved?.signedAt },
+      {
+        key: 'req_appr_to_po_issue',
+        start: r.approvedBy?.signedAt || fallbackStart,
+        end: r.orderedAt,
+      },
+      {
+        key: 'po_issue_to_po_budget',
+        start: r.orderedAt || r.approvedBy?.signedAt || fallbackStart,
+        end: r.poBudgetApproved?.signedAt,
+      },
       {
         key: 'po_budget_to_po_audit',
-        start: r.poBudgetApproved?.signedAt,
+        start: r.poBudgetApproved?.signedAt || r.orderedAt || fallbackStart,
         end: r.poAuditApproved?.signedAt,
       },
       {
         key: 'po_audit_to_po_gm',
-        start: r.poAuditApproved?.signedAt,
+        start: r.poAuditApproved?.signedAt || r.poBudgetApproved?.signedAt || fallbackStart,
         end: r.poGMApproved?.signedAt,
       },
     ]

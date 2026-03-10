@@ -632,6 +632,31 @@ watch(
             <span>Analytics</span>
           </router-link>
 
+          <router-link to="/archive" class="nav-item" active-class="active">
+            <span class="nav-icon">
+              <!-- Realistic Purple Archive Box -->
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M3 6V18C3 19.1046 3.89543 20 5 20H19C20.1046 20 21 19.1046 21 18V6H3Z"
+                  fill="#A855F7"
+                />
+                <path
+                  d="M3 4C3 3.44772 3.44772 3 4 3H20C20.5523 3 21 3.44772 21 4V7H3V4Z"
+                  fill="#C084FC"
+                />
+                <rect x="10" y="10" width="4" height="2" rx="1" fill="white" fill-opacity="0.4" />
+                <path d="M3 7H21V9H3V7Z" fill="black" fill-opacity="0.1" />
+              </svg>
+            </span>
+            <span>Archive</span>
+          </router-link>
+
           <router-link to="/admin/settings" class="nav-item" active-class="active">
             <span class="nav-icon">
               <svg

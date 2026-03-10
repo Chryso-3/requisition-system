@@ -103,7 +103,7 @@ const router = createRouter({
           path: 'archive',
           name: 'archive',
           component: () => import('@/views/ArchiveView.vue'),
-          meta: { roles: [USER_ROLES.GENERAL_MANAGER] },
+          meta: { roles: [USER_ROLES.GENERAL_MANAGER, USER_ROLES.SUPER_ADMIN] },
         },
         {
           path: 'analytics',

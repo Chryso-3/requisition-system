@@ -239,10 +239,8 @@ const paginatedList = computed(() => {
 function handlePageChange(p) {
   currentPage.value = p
 
-  // Smooth scroll back to top of table
-  if (tableContainer.value) {
-    tableContainer.value.scrollTo({ top: 0, behavior: 'smooth' })
-  }
+  // Scroll the window back to the top of the table smoothly
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 
   // Buffered Load More
   const currentViewEnd = p * pageSize.value
@@ -529,16 +527,18 @@ onUnmounted(() => {
             </tr>
           </TransitionGroup>
         </table>
-
-        <PaginationComponent
-          :current-page="currentPage"
-          :total-pages="totalPages"
-          :page-size="pageSize"
-          :total-items="totalFiltered"
-          :loading="loading || loadingMore"
-          @page-change="handlePageChange"
-        />
       </div>
+
+      <!-- Pagination sits OUTSIDE the scrollable table area so it's always visible -->
+      <PaginationComponent
+        v-if="archivedRequisitions.length > 0"
+        :current-page="currentPage"
+        :total-pages="totalPages"
+        :page-size="pageSize"
+        :total-items="totalFiltered"
+        :loading="loading || loadingMore"
+        @page-change="handlePageChange"
+      />
     </div>
 
     <!-- Premium Export Modal (Moved to top-level to avoid backdrop-filter issues) -->
@@ -1012,8 +1012,8 @@ onUnmounted(() => {
 .log-table-container {
   flex: 1;
   overflow-y: auto;
-  max-height: calc(100vh - 250px);
-  min-height: 400px;
+  overflow-x: auto;
+  max-height: calc(100vh - 290px);
 }
 
 .compact-table {

@@ -968,9 +968,18 @@ onUnmounted(() => {
                         <div class="sig-name-overlay">
                           <span
                             class="sig-name"
-                            :class="{ 'override-name': sigMap['recommendingApproval']?.isOverride }"
+                            :class="{
+                              'override-name': sigMap['recommendingApproval']?.isOverride,
+                              'assigned-name':
+                                !requisition.recommendingApproval?.name &&
+                                requisition.assignedApproverName,
+                            }"
                           >
-                            {{ requisition.recommendingApproval?.name || '—' }}
+                            {{
+                              requisition.recommendingApproval?.name ||
+                              requisition.assignedApproverName ||
+                              '—'
+                            }}
                           </span>
                           <div
                             v-if="sigMap['recommendingApproval']?.isOverride"
@@ -1160,6 +1169,12 @@ onUnmounted(() => {
                     <span class="detail-block-label">Department</span>
                     <span class="detail-block-value">{{
                       getDeptAbbreviation(requisition.department)
+                    }}</span>
+                  </div>
+                  <div class="detail-block">
+                    <span class="detail-block-label">Target Approver</span>
+                    <span class="detail-block-value">{{
+                      requisition.assignedApproverName || '—'
                     }}</span>
                   </div>
                 </div>
@@ -2110,6 +2125,11 @@ onUnmounted(() => {
   max-width: 140px;
   max-height: 48px;
   object-fit: contain;
+}
+
+.sig-name.assigned-name {
+  color: #64748b;
+  font-style: italic;
 }
 
 .sig-line {

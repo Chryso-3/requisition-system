@@ -6,7 +6,7 @@ import {
   APPROVAL_WORKFLOW,
   getRequisitionCount,
 } from '@/services/requisitionService'
-import { REQUISITION_STATUS, USER_ROLES, USER_RULE_LABELS } from '@/firebase/collections'
+import { REQUISITION_STATUS, USER_ROLES, USER_ROLE_LABELS } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -83,12 +83,24 @@ async function load() {
         REQUISITION_STATUS.PENDING_APPROVAL,
       ]
       const workflowStatus = approverWorkflow.value?.canApproveStatus
+      const isManager = [
+        USER_ROLES.SECTION_HEAD,
+        USER_ROLES.DIVISION_HEAD,
+        USER_ROLES.DEPARTMENT_HEAD,
+      ].includes(authStore.role)
+      const commonFilters =
+        isManager && authStore.department
+          ? { department: authStore.department, assignedApproverId: uid }
+          : {}
+
       const [total, pendingApp, totalPending, approved, rejected] = await Promise.all([
-        getRequisitionCount(),
-        workflowStatus ? getRequisitionCount({ status: workflowStatus }) : Promise.resolve(0),
-        getRequisitionCount({ status: pendingStatuses }),
-        getRequisitionCount({ status: REQUISITION_STATUS.APPROVED }),
-        getRequisitionCount({ status: REQUISITION_STATUS.REJECTED }),
+        getRequisitionCount(commonFilters),
+        workflowStatus
+          ? getRequisitionCount({ ...commonFilters, status: workflowStatus })
+          : Promise.resolve(0),
+        getRequisitionCount({ ...commonFilters, status: pendingStatuses }),
+        getRequisitionCount({ ...commonFilters, status: REQUISITION_STATUS.APPROVED }),
+        getRequisitionCount({ ...commonFilters, status: REQUISITION_STATUS.REJECTED }),
       ])
       stats.value = {
         total,
@@ -104,6 +116,18 @@ async function load() {
     loading.value = false
   }
 }
+
+const formattedError = computed(() => {
+  if (!error.value) return null
+  const googleLinkRegex = /(https:\/\/console\.firebase\.google\.com[^\s]+)/g
+  if (googleLinkRegex.test(error.value)) {
+    return error.value.replace(
+      googleLinkRegex,
+      '<a href="$1" target="_blank" class="error-link">Create Index here →</a>',
+    )
+  }
+  return error.value
+})
 
 function goTo(path) {
   router.push(path)
@@ -122,9 +146,7 @@ onMounted(load)
       </p>
     </div>
 
-    <div v-if="error" class="error-banner">
-      {{ error }}
-    </div>
+    <div v-if="error" class="error-banner" v-html="formattedError"></div>
 
     <!-- Requestor: summary only, no table -->
     <template v-if="isRequestor">
@@ -235,12 +257,26 @@ onMounted(load)
 }
 
 .error-banner {
-  padding: 1rem 1.25rem;
   background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: var(--jinja-radius);
+  border-left: 4px solid #ef4444;
+  padding: 1rem;
+  border-radius: 8px;
   color: #b91c1c;
+  margin-bottom: 1.5rem;
   font-size: 0.875rem;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+:deep(.error-link) {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-weight: 700;
+  color: #b91c1c;
+  text-decoration: underline;
+  padding: 4px 8px;
+  background: #fee2e2;
+  border-radius: 4px;
 }
 
 .loading-block {

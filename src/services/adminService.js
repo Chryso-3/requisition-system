@@ -60,6 +60,17 @@ export async function updateUserRole(uid, newRole) {
 }
 
 /**
+ * Update a user's department
+ */
+export async function updateUserDepartment(uid, dept) {
+  const userRef = doc(db, COLLECTIONS.USERS, uid)
+  await updateDoc(userRef, {
+    department: dept,
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+/**
  * Set user active status (soft deactivate)
  */
 export async function setUserActive(uid, isActive) {
@@ -195,4 +206,36 @@ export async function updateSupplier(id, updates) {
     ...updates,
     updatedAt: serverTimestamp(),
   })
+}
+/**
+ * API for Fetching Managers by Department (For Direct Assignment)
+ * Fetches all users in the department PLUS OGM (Office of General Manager) users
+ * since they act as global approvers. Filters in JS for robustness.
+ */
+export async function getDepartmentManagers(dept) {
+  if (!dept) return []
+  const managerRoles = [
+    USER_ROLES.SECTION_HEAD,
+    USER_ROLES.DIVISION_HEAD,
+    USER_ROLES.DEPARTMENT_HEAD,
+    USER_ROLES.GENERAL_MANAGER,
+  ]
+
+  const OGM = 'OFFICE OF GENERAL MANAGER'
+
+  // Fetch from the target department OR OGM
+  const q = query(
+    collection(db, COLLECTIONS.USERS),
+    where('department', 'in', [dept, OGM]),
+    where('role', 'in', managerRoles),
+  )
+
+  const snap = await getDocs(q)
+
+  return snap.docs
+    .map((d) => ({
+      uid: d.id,
+      ...d.data(),
+    }))
+    .filter((u) => u.isActive !== false)
 }

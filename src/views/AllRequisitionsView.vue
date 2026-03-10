@@ -54,7 +54,19 @@ const filteredRequisitions = computed(() => {
 
   // Approver inbox: only items waiting for my approval
   if (w && !showAll.value) {
-    return list.filter((r) => r.status === w.canApproveStatus)
+    const isManager = [
+      USER_ROLES.SECTION_HEAD,
+      USER_ROLES.DIVISION_HEAD,
+      USER_ROLES.DEPARTMENT_HEAD,
+    ].includes(authStore.role)
+    return list.filter((r) => {
+      const statusMatch = r.status === w.canApproveStatus
+      if (!statusMatch) return false
+      if (isManager) {
+        return r.assignedApproverId === authStore.user?.uid
+      }
+      return true
+    })
   }
 
   // Approver "my history": only items I already processed (approved/declined)
@@ -63,8 +75,37 @@ const filteredRequisitions = computed(() => {
     return list.filter((r) => {
       const approvedByMe = r?.[w.field]?.userId && r?.[w.field]?.userId === myId
       const declinedByMe = r?.rejectedBy?.userId && r?.rejectedBy?.userId === myId
-      return !!(approvedByMe || declinedByMe)
+      const matchesAction = !!(approvedByMe || declinedByMe)
+
+      // Strict department check for managers even in history
+      const isManager = [
+        USER_ROLES.SECTION_HEAD,
+        USER_ROLES.DIVISION_HEAD,
+        USER_ROLES.DEPARTMENT_HEAD,
+      ].includes(authStore.role)
+      if (isManager) {
+        const deptMatch =
+          r.department?.trim().toUpperCase() === authStore.department?.trim().toUpperCase()
+        const assignedToMe = r.assignedApproverId === myId
+        return (approvedByMe || declinedByMe || assignedToMe) && deptMatch
+      }
+
+      return matchesAction
     })
+  }
+
+  // Fallback / Admin / System Roles
+  const isManager = [
+    USER_ROLES.SECTION_HEAD,
+    USER_ROLES.DIVISION_HEAD,
+    USER_ROLES.DEPARTMENT_HEAD,
+  ].includes(authStore.role)
+  if (isManager) {
+    return list.filter(
+      (r) =>
+        r.department?.trim().toUpperCase() === authStore.department?.trim().toUpperCase() &&
+        r.assignedApproverId === authStore.user?.uid,
+    )
   }
 
   return list
@@ -106,6 +147,17 @@ async function refreshData() {
     if (w && !showAll.value) {
       filters.status = w.canApproveStatus
     }
+
+    // Apply strict department filter to queries if user is a manager
+    const isManager = [
+      USER_ROLES.SECTION_HEAD,
+      USER_ROLES.DIVISION_HEAD,
+      USER_ROLES.DEPARTMENT_HEAD,
+    ].includes(authStore.role)
+    if (isManager && authStore.department) {
+      filters.department = authStore.department
+      filters.assignedApproverId = authStore.user?.uid
+    }
     // Note: History filter (showAll) usually requires a different query approach if filtering by "approvedByMe".
     // For now, we'll implement totalItems for the current filter set.
     totalItems.value = await getRequisitionCount(filters)
@@ -146,6 +198,18 @@ function formatDate(val) {
   const d = val?.toDate ? val.toDate() : new Date(val)
   return d.toLocaleDateString()
 }
+
+const formattedError = computed(() => {
+  if (!error.value) return null
+  const googleLinkRegex = /(https:\/\/console\.firebase\.google\.com[^\s]+)/g
+  if (googleLinkRegex.test(error.value)) {
+    return error.value.replace(
+      googleLinkRegex,
+      '<a href="$1" target="_blank" class="error-link">Create Index here →</a>',
+    )
+  }
+  return error.value
+})
 
 function goToDetail(id) {
   router.push(`/requisitions/${id}`)
@@ -262,10 +326,7 @@ onUnmounted(() => {
       </div>
 
       <div class="panel-body">
-        <div v-if="error" class="error-message">
-          <span class="error-icon">⚠️</span>
-          {{ error }}
-        </div>
+        <div v-if="error" class="error-banner" v-html="formattedError"></div>
 
         <div v-else class="table-section">
           <div class="table-container" ref="tableContainer">
@@ -276,6 +337,7 @@ onUnmounted(() => {
                   <th>Date</th>
                   <th>Department</th>
                   <th>Requested By</th>
+                  <th>Approver</th>
                   <th>Purpose</th>
                   <th>Status</th>
                   <th>Items</th>
@@ -305,6 +367,9 @@ onUnmounted(() => {
                   <td>{{ formatDate(r.date) }}</td>
                   <td>{{ getDeptAbbreviation(r.department) }}</td>
                   <td>{{ r.requestedBy?.name || '—' }}</td>
+                  <td class="approver-cell">
+                    {{ r.assignedApproverName || '—' }}
+                  </td>
                   <td class="purpose-cell" :title="r.purpose">
                     {{ r.purpose || '—' }}
                   </td>
@@ -800,6 +865,30 @@ onUnmounted(() => {
   font-size: 0.875rem;
   font-weight: 500;
   border-radius: 8px;
+}
+
+.error-banner {
+  background: #fef2f2;
+  border-left: 4px solid #ef4444;
+  padding: 1.25rem;
+  border-radius: 8px;
+  color: #b91c1c;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+:deep(.error-link) {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-weight: 700;
+  color: #b91c1c;
+  text-decoration: underline;
+  padding: 6px 12px;
+  background: #fee2e2;
+  border-radius: 6px;
+  width: fit-content;
 }
 
 .spinner {

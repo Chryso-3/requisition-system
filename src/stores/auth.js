@@ -35,6 +35,7 @@ export const useAuthStore = defineStore('auth', () => {
       'User',
   )
   const role = computed(() => userProfile.value?.role ?? USER_ROLES.REQUESTER)
+  const department = computed(() => userProfile.value?.department ?? null)
 
   function setUser(u) {
     user.value = u
@@ -217,6 +218,7 @@ export const useAuthStore = defineStore('auth', () => {
     hasPassword,
     displayName,
     role,
+    department,
     setUser,
     signUp,
     signIn,

@@ -1,7 +1,13 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { getAllUsers, updateUserRole, setUserActive } from '@/services/adminService'
+import {
+  getAllUsers,
+  updateUserRole,
+  setUserActive,
+  updateUserDepartment,
+} from '@/services/adminService'
 import { USER_ROLES, USER_ROLE_LABELS } from '@/firebase/collections'
+import { DEPARTMENTS } from '@/constants/departments'
 import {
   Search,
   UserCog,
@@ -11,6 +17,7 @@ import {
   Mail,
   Calendar,
   ShieldCheck,
+  Building2,
 } from 'lucide-vue-next'
 
 const users = ref([])
@@ -18,6 +25,12 @@ const loading = ref(true)
 const searchQuery = ref('')
 const selectedRole = ref('all')
 const savingId = ref(null)
+
+const departmentalRoles = [
+  USER_ROLES.SECTION_HEAD,
+  USER_ROLES.DIVISION_HEAD,
+  USER_ROLES.DEPARTMENT_HEAD,
+]
 
 const roleOptions = Object.entries(USER_ROLE_LABELS).map(([value, label]) => ({
   value,
@@ -37,7 +50,8 @@ const filteredUsers = computed(() => {
     (u) =>
       u.displayName?.toLowerCase().includes(q) ||
       u.email?.toLowerCase().includes(q) ||
-      u.role?.toLowerCase().includes(q),
+      u.role?.toLowerCase().includes(q) ||
+      u.department?.toLowerCase().includes(q),
   )
 })
 
@@ -63,6 +77,23 @@ async function handleRoleChange(user, newRole) {
   } finally {
     savingId.value = null
   }
+}
+
+async function handleDepartmentChange(user, newDept) {
+  savingId.value = user.uid
+  try {
+    await updateUserDepartment(user.uid, newDept)
+    user.department = newDept
+  } catch (err) {
+    console.error('Error updating department:', err)
+    alert('Failed to update department.')
+  } finally {
+    savingId.value = null
+  }
+}
+
+function isDepartmentalRole(role) {
+  return departmentalRoles.includes(role)
 }
 
 async function toggleUserStatus(user) {
@@ -130,6 +161,7 @@ onMounted(fetchUsers)
             <tr>
               <th class="col-user">User Details</th>
               <th class="col-role">System Role</th>
+              <th class="col-dept">Department</th>
               <th class="col-status">Status</th>
               <th class="col-date">Registered On</th>
               <th class="col-actions text-left">Actions</th>
@@ -162,6 +194,23 @@ onMounted(fetchUsers)
                       {{ opt.label }}
                     </option>
                   </select>
+                </div>
+              </td>
+              <td class="col-dept">
+                <div class="role-wrapper">
+                  <select
+                    v-if="isDepartmentalRole(user.role)"
+                    :value="user.department"
+                    @change="handleDepartmentChange(user, $event.target.value)"
+                    :disabled="savingId === user.uid"
+                    class="elite-select dept-select"
+                  >
+                    <option value="" disabled>Not Assigned</option>
+                    <option v-for="dept in DEPARTMENTS" :key="dept" :value="dept">
+                      {{ dept }}
+                    </option>
+                  </select>
+                  <span v-else class="na-text">All Departments</span>
                 </div>
               </td>
               <td class="col-status">
@@ -311,20 +360,35 @@ onMounted(fetchUsers)
 
 /* Locked Column Widths */
 .col-user {
-  width: 300px; /* Reduced for better spacing */
+  width: 260px; /* Reduced for better spacing */
 }
 .col-role {
-  width: 300px;
+  width: 220px;
+}
+.col-dept {
+  width: 240px;
 }
 .col-status {
-  width: 160px;
+  width: 140px;
 }
 .col-date {
-  width: 180px;
+  width: 160px;
 }
 .col-actions {
   width: 180px; /* Balanced actions width */
   padding-right: 0 !important; /* Force flush right alignment */
+}
+
+.na-text {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-style: italic;
+  font-weight: 500;
+  padding-left: 0.5rem;
+}
+
+.dept-select {
+  border-left: 3px solid #0ea5e9;
 }
 
 .elite-table th {

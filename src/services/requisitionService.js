@@ -145,10 +145,25 @@ export function unsubscribeAllSubscriptions() {
 }
 
 /**
+ * Finds users with multiple roles. Returns full user data objects to allow department filtering.
+ */
+export async function getEmailsByRoles(roles) {
+  try {
+    const q = query(collection(db, COLLECTIONS.USERS), where('role', 'in', roles))
+    const snap = await getDocs(q)
+
+    return snap.docs.map((d) => d.data()).filter((data) => data.isActive !== false)
+  } catch (error) {
+    console.error(`[getEmailsByRoles] Error fetching for roles ${roles}:`, error)
+    return []
+  }
+}
+
+/**
  * Finds users with a specific role and returns their email addresses.
  * Used for routing notifications.
  */
-async function getEmailsByRole(role) {
+export async function getEmailsByRole(role) {
   try {
     const q = query(collection(db, COLLECTIONS.USERS), where('role', '==', role))
     const snap = await getDocs(q)
@@ -1355,6 +1370,12 @@ function buildRequisitionsQuery(filters = {}, opts = {}) {
   if (filters.canvassStatus && !Array.isArray(filters.canvassStatus)) {
     constraints.push(where('canvassStatus', '==', filters.canvassStatus))
   }
+  if (filters.department) {
+    constraints.push(where('department', '==', filters.department))
+  }
+  if (filters.assignedApproverId) {
+    constraints.push(where('assignedApproverId', '==', filters.assignedApproverId))
+  }
   constraints.push(orderBy('createdAt', 'desc'), limit(pageSize))
   if (startAfterDoc) constraints.push(startAfter(startAfterDoc))
   return query(base, ...constraints)
@@ -1395,6 +1416,12 @@ export async function getRequisitionCount(filters = {}) {
   }
   if (filters.canvassStatus && !Array.isArray(filters.canvassStatus)) {
     constraints.push(where('canvassStatus', '==', filters.canvassStatus))
+  }
+  if (filters.department) {
+    constraints.push(where('department', '==', filters.department))
+  }
+  if (filters.assignedApproverId) {
+    constraints.push(where('assignedApproverId', '==', filters.assignedApproverId))
   }
   const q = query(base, ...constraints)
   const snapshot = await getCountFromServer(q)
@@ -2105,7 +2132,7 @@ export async function submitRequisition(id, updates = {}) {
     ...updates,
   })
 
-  // Notification: Notify Section Head and Requestor (Receipt)
+  // Notification: Notify Assigned Approver and Requestor (Receipt)
   try {
     let req = await getRequisition(id)
     req = await ensureRequestorEmail(req)
@@ -2113,10 +2140,41 @@ export async function submitRequisition(id, updates = {}) {
     // 1. Receipt to Requestor
     await notificationService.notifySubmissionReceipt(req)
 
-    // 2. Alert to Next Approver (Section Head)
-    const emails = await getEmailsByRole(USER_ROLES.SECTION_HEAD)
-    if (emails.length > 0) {
-      await notificationService.notifyNextApprover(req, 'Section Head', emails)
+    // 2. Alert to Assigned Approver
+    if (req.assignedApproverId) {
+      // Fetch specific approver email
+      const userRef = doc(db, COLLECTIONS.USERS, req.assignedApproverId)
+      const userSnap = await getDoc(userRef)
+      if (userSnap.exists()) {
+        const userData = userSnap.data()
+        if (userData.email && userData.isActive !== false) {
+          await notificationService.notifyNextApprover(
+            req,
+            userData.role || 'Manager',
+            userData.email,
+          )
+        }
+      }
+    } else {
+      // Legacy Fallback: Notify all Managers of the same department
+      const managerRoles = [
+        USER_ROLES.SECTION_HEAD,
+        USER_ROLES.DIVISION_HEAD,
+        USER_ROLES.DEPARTMENT_HEAD,
+      ]
+      const managers = await getEmailsByRoles(managerRoles)
+
+      const targetEmails = managers
+        .filter((m) => {
+          if (!m.department || !req.department) return false
+          return m.department.trim().toUpperCase() === req.department.trim().toUpperCase()
+        })
+        .map((m) => m.email)
+        .filter((e) => !!e)
+
+      if (targetEmails.length > 0) {
+        await notificationService.notifyNextApprover(req, 'Manager', targetEmails)
+      }
     }
   } catch (e) {
     console.error('Submission notification error:', e)
@@ -2134,7 +2192,19 @@ export const APPROVAL_WORKFLOW = {
     canApproveStatus: REQUISITION_STATUS.PENDING_RECOMMENDATION,
     nextStatus: REQUISITION_STATUS.PENDING_INVENTORY,
     field: 'recommendingApproval',
-    title: 'Section Head / Div. Head / Department Head',
+    title: 'Section Head',
+  },
+  division_head: {
+    canApproveStatus: REQUISITION_STATUS.PENDING_RECOMMENDATION,
+    nextStatus: REQUISITION_STATUS.PENDING_INVENTORY,
+    field: 'recommendingApproval',
+    title: 'Division Head',
+  },
+  department_head: {
+    canApproveStatus: REQUISITION_STATUS.PENDING_RECOMMENDATION,
+    nextStatus: REQUISITION_STATUS.PENDING_INVENTORY,
+    field: 'recommendingApproval',
+    title: 'Department Head',
   },
   warehouse_head: {
     canApproveStatus: REQUISITION_STATUS.PENDING_INVENTORY,
@@ -2504,7 +2574,7 @@ export function getRequisitionStatusLog(requisition) {
     {
       key: 'recommendingApproval',
       status: REQUISITION_STATUS.PENDING_RECOMMENDATION,
-      role: 'Section Head / Div. Head / Dept. Head',
+      role: 'Manager (Sec/Div/Dept)',
     },
     {
       key: 'inventoryChecked',
@@ -2525,12 +2595,12 @@ export function getRequisitionStatusLog(requisition) {
     const isCurrent = req.status === status
     entries.push({
       step: role,
-      role,
+      role: data?.title || role,
       department: req.department || '—',
       by: data?.name ?? null,
       at: data?.signedAt ?? null,
       done: !!data,
-      current: isCurrent,
+      isCurrent,
     })
   }
 

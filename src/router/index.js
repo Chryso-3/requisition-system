@@ -12,6 +12,8 @@ function defaultPathForRole(role) {
   // For other specific approver roles, all-requisitions is the hub
   const approverRoles = [
     USER_ROLES.SECTION_HEAD,
+    USER_ROLES.DIVISION_HEAD,
+    USER_ROLES.DEPARTMENT_HEAD,
     USER_ROLES.WAREHOUSE_HEAD,
     USER_ROLES.BUDGET_OFFICER,
     USER_ROLES.INTERNAL_AUDITOR,
@@ -86,6 +88,8 @@ const router = createRouter({
           meta: {
             roles: [
               USER_ROLES.SECTION_HEAD,
+              USER_ROLES.DIVISION_HEAD,
+              USER_ROLES.DEPARTMENT_HEAD,
               USER_ROLES.WAREHOUSE_HEAD,
               USER_ROLES.BUDGET_OFFICER,
               USER_ROLES.INTERNAL_AUDITOR,

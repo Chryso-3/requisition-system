@@ -1,7 +1,8 @@
 <script setup>
 import { ref, reactive, watch, computed } from 'vue'
 import { createRequisitionDocument, updateRequisition } from '@/services/requisitionService'
-import { REQUISITION_STATUS } from '@/firebase/collections'
+import { getDepartmentManagers } from '@/services/adminService'
+import { REQUISITION_STATUS, USER_ROLE_LABELS } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
 import { DEPARTMENTS } from '@/constants/departments'
 
@@ -23,9 +24,13 @@ const isEditing = computed(() => !!props.requisition)
 const form = reactive({
   date: new Date().toISOString().slice(0, 10),
   department: '',
+  assignedApproverId: '', // Direct Assignment
   purpose: '',
   items: [{ quantity: 1, unit: 'pcs', description: '', remarks: '' }],
 })
+
+const availableManagers = ref([])
+const fetchingManagers = ref(false)
 
 // Load existing requisition data if editing
 watch(
@@ -38,6 +43,7 @@ watch(
           ? new Date(req.date).toISOString().slice(0, 10)
           : new Date().toISOString().slice(0, 10)
       form.department = req.department || ''
+      form.assignedApproverId = req.assignedApproverId || ''
       form.purpose = req.purpose || ''
       form.items =
         req.items && req.items.length > 0
@@ -86,9 +92,40 @@ function closeSaveConfirm() {
   showSaveConfirm.value = false
 }
 
+// Watch department to fetch specific managers
+watch(
+  () => form.department,
+  async (newDept) => {
+    if (newDept) {
+      fetchingManagers.value = true
+      try {
+        const managers = await getDepartmentManagers(newDept)
+        availableManagers.value = managers
+        // If editing and managers are loaded, don't reset unless current isn't in list
+        if (!isEditing.value || !managers.find((m) => m.uid === form.assignedApproverId)) {
+          form.assignedApproverId = ''
+        }
+      } catch (e) {
+        console.error('Failed to fetch department managers:', e)
+      } finally {
+        fetchingManagers.value = false
+      }
+    } else {
+      availableManagers.value = []
+      form.assignedApproverId = ''
+    }
+  },
+)
+
 async function onSubmit() {
   closeSaveConfirm()
   error.value = null
+
+  if (!form.assignedApproverId) {
+    error.value = 'Please select a specific approver for this request.'
+    return
+  }
+
   loading.value = true
   try {
     const items = form.items
@@ -104,6 +141,10 @@ async function onSubmit() {
       throw new Error('Add at least one item with a description.')
     }
 
+    const assignedManager = availableManagers.value.find((m) => m.uid === form.assignedApproverId)
+    const approverName =
+      assignedManager?.displayName || assignedManager?.name || 'Assigned Approver'
+
     if (isEditing.value) {
       const requestedBy = authStore.user
         ? {
@@ -114,6 +155,9 @@ async function onSubmit() {
         : props.requisition.requestedBy
       const doc = await updateRequisition(props.requisition.id, {
         department: form.department,
+        assignedApproverId: form.assignedApproverId,
+        assignedApproverName: approverName,
+        assignedApproverRole: assignedManager?.role || 'Section/Division Head',
         purpose: form.purpose,
         date: form.date
           ? new Date(form.date + 'T12:00:00').toISOString()
@@ -125,6 +169,9 @@ async function onSubmit() {
     } else {
       const doc = await createRequisitionDocument({
         department: form.department,
+        assignedApproverId: form.assignedApproverId,
+        assignedApproverName: approverName,
+        assignedApproverRole: assignedManager?.role || 'Section/Division Head',
         purpose: form.purpose,
         date: form.date
           ? new Date(form.date + 'T12:00:00').toISOString()
@@ -170,12 +217,36 @@ async function onSubmit() {
       </div>
     </div>
 
-    <div class="field">
-      <label>Department</label>
-      <select v-model="form.department" required>
-        <option value="" disabled>Select Department</option>
-        <option v-for="dept in departments" :key="dept" :value="dept">{{ dept }}</option>
-      </select>
+    <div class="field-row">
+      <div class="field">
+        <label>Department</label>
+        <select v-model="form.department" required>
+          <option value="" disabled>Select Department</option>
+          <option v-for="dept in departments" :key="dept" :value="dept">{{ dept }}</option>
+        </select>
+      </div>
+
+      <!-- Direct Approver Assignment -->
+      <div class="field" :class="{ 'field-disabled': !form.department || fetchingManagers }">
+        <label>Confirm Name of Approver (Section / Div. Head)</label>
+        <div v-if="fetchingManagers" class="fetching-indicator">
+          <span class="spinner-tiny"></span> Loading authorized personnel...
+        </div>
+        <select v-else v-model="form.assignedApproverId" :disabled="!form.department" required>
+          <option value="" disabled>
+            {{ form.department ? 'Choose specific name...' : 'Please select department first' }}
+          </option>
+          <option v-for="m in availableManagers" :key="m.uid" :value="m.uid">
+            {{ m.displayName || m.name }} — {{ USER_ROLE_LABELS[m.role] }}
+          </option>
+        </select>
+        <small
+          v-if="form.department && !fetchingManagers && availableManagers.length === 0"
+          class="error-text"
+        >
+          No active managers found for this department. Please contact Admin.
+        </small>
+      </div>
     </div>
 
     <div class="field">
@@ -620,6 +691,42 @@ async function onSubmit() {
     position: fixed;
     top: 50mm;
     right: 30mm;
+  }
+}
+
+.fetching-indicator {
+  font-size: 0.8rem;
+  color: #64748b;
+  margin-top: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.spinner-tiny {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+.error-text {
+  color: #ef4444;
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
+.field-disabled select {
+  background-color: #f8fafc !important;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

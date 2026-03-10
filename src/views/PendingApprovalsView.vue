@@ -7,7 +7,7 @@ import {
   REQUISITION_PAGE_SIZE,
 } from '@/services/requisitionService'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
-import { REQUISITION_STATUS, USER_ROLE_LABELS } from '@/firebase/collections'
+import { REQUISITION_STATUS, USER_ROLE_LABELS, USER_ROLES } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
 import PaginationComponent from '@/components/PaginationComponent.vue'
 
@@ -21,6 +21,8 @@ const pageSize = ref(10) // Standard page size for the UI
 const currentPage = ref(1)
 const tableContainer = ref(null)
 
+const managerRoles = [USER_ROLES.SECTION_HEAD, USER_ROLES.DIVISION_HEAD, USER_ROLES.DEPARTMENT_HEAD]
+
 let unsubscribe = null
 
 const approverWorkflow = computed(() =>
@@ -29,8 +31,25 @@ const approverWorkflow = computed(() =>
 
 const pendingRequisitions = computed(() => {
   if (!approverWorkflow.value) return []
+
+  const isManager = managerRoles.includes(authStore.role)
+
   // Filter for items matching the approver's "canApprove" status
-  return requisitions.value.filter((r) => r.status === approverWorkflow.value.canApproveStatus)
+  return requisitions.value.filter((r) => {
+    const statusMatch = r.status === approverWorkflow.value.canApproveStatus
+    if (!statusMatch) return false
+
+    // If manager, they MUST match the requisition department AND be the assigned person
+    if (isManager) {
+      if (!authStore.department) return false
+      const deptMatch =
+        r.department?.trim().toUpperCase() === authStore.department.trim().toUpperCase()
+      const personMatch = r.assignedApproverId === authStore.user?.uid
+      return deptMatch && personMatch
+    }
+
+    return true
+  })
 })
 
 const totalRows = computed(() => pendingRequisitions.value.length)
@@ -61,9 +80,15 @@ function initSubscription() {
 
   if (unsubscribe) unsubscribe()
 
+  const filters = { status: workflow.canApproveStatus }
+  if (isManager && authStore.department) {
+    filters.department = authStore.department
+    filters.assignedApproverId = authStore.user?.uid
+  }
+
   // We subscribe to a larger buffer (200) to allow numbered pagination across the inbox.
   unsubscribe = subscribeRequisitions(
-    { status: workflow.canApproveStatus },
+    filters,
     (results) => {
       requisitions.value = results
       loading.value = false
@@ -75,6 +100,18 @@ function initSubscription() {
     { pageSize: 200 },
   )
 }
+
+const formattedError = computed(() => {
+  if (!error.value) return null
+  const googleLinkRegex = /(https:\/\/console\.firebase\.google\.com[^\s]+)/g
+  if (googleLinkRegex.test(error.value)) {
+    return error.value.replace(
+      googleLinkRegex,
+      '<a href="$1" target="_blank" class="error-link">Create Index here →</a>',
+    )
+  }
+  return error.value
+})
 
 function formatDate(val) {
   if (!val) return '—'
@@ -130,10 +167,7 @@ watch(totalRows, (newTotal) => {
       </div>
 
       <div class="panel-body">
-        <div v-if="error" class="error-message">
-          <span class="error-icon">⚠️</span>
-          {{ error }}
-        </div>
+        <div v-if="error" class="error-message" v-html="formattedError"></div>
 
         <div v-else-if="loading" class="loading-inline">
           <div class="spinner small"></div>
@@ -509,14 +543,28 @@ watch(totalRows, (newTotal) => {
 }
 
 .error-message {
-  margin: 1rem;
-  padding: 1rem;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  color: #dc2626;
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-direction: column;
+  padding: 1.25rem;
+  background: #fef2f2;
+  border-left: 4px solid #ef4444;
+  border-radius: 8px;
+  color: #b91c1c;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+:deep(.error-link) {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-weight: 700;
+  color: #b91c1c;
+  text-decoration: underline;
+  padding: 6px 12px;
+  background: #fee2e2;
+  border-radius: 6px;
+  width: fit-content;
 }
 </style>

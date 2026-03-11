@@ -6,6 +6,7 @@ import {
   loadMoreRequisitions,
   getRequisitionCurrentStep,
   REQUISITION_PAGE_SIZE,
+  REQUISITION_LIST_LIMIT,
   getUserRequisitionStats,
   subscribeAnalyticsSummary,
 } from '@/services/requisitionService'
@@ -226,7 +227,7 @@ function startRealtime() {
     (results, lastDocSnapshot) => {
       requisitions.value = results
       lastDoc.value = lastDocSnapshot
-      hasMore.value = results.length === REQUISITION_PAGE_SIZE
+      hasMore.value = results.length === REQUISITION_LIST_LIMIT
       error.value = null
       loading.value = false
     },
@@ -234,7 +235,7 @@ function startRealtime() {
       error.value = err?.message || 'Unable to load requisitions.'
       loading.value = false
     },
-    { pageSize: REQUISITION_PAGE_SIZE },
+    { pageSize: REQUISITION_LIST_LIMIT },
   )
 }
 
@@ -254,7 +255,7 @@ async function loadMore() {
       requisitions: next,
       lastDoc: nextLastDoc,
       hasMore: nextHasMore,
-    } = await loadMoreRequisitions(filters, lastDoc.value, REQUISITION_PAGE_SIZE)
+    } = await loadMoreRequisitions(filters, lastDoc.value, REQUISITION_LIST_LIMIT)
     moreRequisitions.value = [...moreRequisitions.value, ...next]
     lastDoc.value = nextLastDoc
     hasMore.value = nextHasMore
@@ -329,9 +330,6 @@ onUnmounted(() => {
   <div class="my-requisitions jinja">
     <div class="page-header">
       <h1 class="page-title">My requisitions</h1>
-      <p v-if="isGlobalRole" class="page-subtitle">
-        View only — you can open requisitions to see details and approve when pending your approval.
-      </p>
     </div>
     <div class="stats-hero">
       <div class="stat-card" @click="filterStatus = ''">
@@ -486,84 +484,86 @@ onUnmounted(() => {
           {{ error }}
         </div>
 
-        <div v-else class="table-section">
-          <div class="table-container" ref="tableContainer">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>RF Control No.</th>
-                  <th>Date</th>
-                  <th>Department</th>
-                  <th>Purpose</th>
-                  <th>Status</th>
-                  <th>Purchase</th>
-                  <th>Currently at</th>
-                  <th>Items</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="loading" class="loading-row" key="loading">
-                  <td colspan="9" class="loading-cell">
-                    <div class="spinner small"></div>
-                    <span>Loading your requisitions…</span>
-                  </td>
-                </tr>
-                <tr v-else-if="filteredRequisitions.length === 0" class="empty-row" key="empty">
-                  <td colspan="9" class="empty-cell">
-                    <span v-if="!searchKeywords && !filterStatus"
-                      >No requisitions match your filter. Create your first to get started.</span
-                    >
-                    <span v-else>No requisitions match your filter.</span>
-                    <button
-                      v-if="!isGlobalRole"
-                      class="btn-primary inline-btn"
-                      @click.stop="createNew"
-                    >
-                      <span class="btn-icon">+</span>
-                      Create Requisition
-                    </button>
-                  </td>
-                </tr>
-                <tr
-                  v-else
-                  v-for="r in paginatedRequisitions"
-                  :key="r.id"
-                  @click="goToDetail(r.id)"
-                  class="row-item"
-                >
-                  <td class="font-medium">{{ r.rfControlNo || '—' }}</td>
-                  <td>{{ formatDate(r.date) }}</td>
-                  <td>{{ getDeptAbbreviation(r.department) }}</td>
-                  <td class="purpose-cell" :title="r.purpose">
-                    {{ r.purpose || '—' }}
-                  </td>
-                  <td>
-                    <span :class="['status-badge', r.status]">{{
-                      statusLabel[r.status] || r.status
-                    }}</span>
-                  </td>
-                  <td>
-                    <template v-if="r.status === REQUISITION_STATUS.APPROVED">
-                      <span :class="['purchase-badge', r.purchaseStatus || 'pending']">
-                        {{
-                          (r.purchaseStatus || 'pending').charAt(0).toUpperCase() +
-                          (r.purchaseStatus || 'pending').slice(1)
-                        }}
-                      </span>
-                    </template>
-                    <span v-else class="text-muted small">—</span>
-                  </td>
-                  <td class="current-step-cell">{{ getCurrentStep(r) }}</td>
-                  <td class="text-center">{{ (r.items || []).length }}</td>
-                  <td class="workflow-cell action-buttons">
-                    <button type="button" class="btn-workflow" @click.stop="goToDetail(r.id)">
-                      Workflow
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+        <div v-else class="table-and-pagination-layout">
+          <div class="table-section">
+            <div class="table-container" ref="tableContainer">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>RF Control No.</th>
+                    <th>Date</th>
+                    <th>Department</th>
+                    <th>Purpose</th>
+                    <th>Status</th>
+                    <th>Purchase</th>
+                    <th>Currently at</th>
+                    <th>Items</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="loading" class="loading-row" key="loading">
+                    <td colspan="9" class="loading-cell">
+                      <div class="spinner small"></div>
+                      <span>Loading your requisitions…</span>
+                    </td>
+                  </tr>
+                  <tr v-else-if="filteredRequisitions.length === 0" class="empty-row" key="empty">
+                    <td colspan="9" class="empty-cell">
+                      <span v-if="!searchKeywords && !filterStatus"
+                        >No requisitions match your filter. Create your first to get started.</span
+                      >
+                      <span v-else>No requisitions match your filter.</span>
+                      <button
+                        v-if="!isGlobalRole"
+                        class="btn-primary inline-btn"
+                        @click.stop="createNew"
+                      >
+                        <span class="btn-icon">+</span>
+                        Create Requisition
+                      </button>
+                    </td>
+                  </tr>
+                  <tr
+                    v-else
+                    v-for="r in paginatedRequisitions"
+                    :key="r.id"
+                    @click="goToDetail(r.id)"
+                    class="row-item"
+                  >
+                    <td class="font-medium">{{ r.rfControlNo || '—' }}</td>
+                    <td>{{ formatDate(r.date) }}</td>
+                    <td>{{ getDeptAbbreviation(r.department) }}</td>
+                    <td class="purpose-cell" :title="r.purpose">
+                      {{ r.purpose ? (r.purpose.length > 11 ? r.purpose.substring(0, 11) + '...' : r.purpose) : '—' }}
+                    </td>
+                    <td>
+                      <span :class="['status-badge', r.status]">{{
+                        statusLabel[r.status] || r.status
+                      }}</span>
+                    </td>
+                    <td>
+                      <template v-if="r.status === REQUISITION_STATUS.APPROVED">
+                        <span :class="['purchase-badge', r.purchaseStatus || 'pending']">
+                          {{
+                            (r.purchaseStatus || 'pending').charAt(0).toUpperCase() +
+                            (r.purchaseStatus || 'pending').slice(1)
+                          }}
+                        </span>
+                      </template>
+                      <span v-else class="text-muted small">—</span>
+                    </td>
+                    <td class="current-step-cell">{{ getCurrentStep(r) }}</td>
+                    <td class="text-center">{{ (r.items || []).length }}</td>
+                    <td class="workflow-cell action-buttons">
+                      <button type="button" class="btn-workflow" @click.stop="goToDetail(r.id)">
+                        Workflow
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <PaginationComponent
@@ -840,6 +840,22 @@ onUnmounted(() => {
 }
 
 /* Table Styling */
+.panel-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.table-and-pagination-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
 .table-section {
   flex: 1;
   overflow: hidden;
@@ -849,10 +865,9 @@ onUnmounted(() => {
 }
 .table-container {
   flex: 1;
-  overflow-y: scroll; /* Force show to prove scrollability */
-  scrollbar-gutter: stable;
+  overflow-y: auto;
   min-height: 0;
-  max-height: calc(100vh - 380px); /* Strict boundary to force scroll */
+  max-height: calc(100vh - 380px);
 }
 
 /* Custom Scrollbar - High Visibility */
@@ -909,13 +924,10 @@ onUnmounted(() => {
 }
 
 .purpose-cell {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  -webkit-box-orient: vertical;
+  max-width: 250px;
+  white-space: nowrap;
   overflow: hidden;
-  white-space: normal;
-  word-break: break-word;
+  text-overflow: ellipsis;
 }
 
 /* Status Badges */

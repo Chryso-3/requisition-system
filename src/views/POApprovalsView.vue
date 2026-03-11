@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import PaginationComponent from '@/components/PaginationComponent.vue'
 import {
   subscribePOApprovals,
   getPOApprovals,
@@ -24,6 +25,17 @@ const confirmRejectOpen = ref(false)
 const selectedPO = ref(null)
 const rejectRemarks = ref('')
 const rejectError = ref('')
+
+const currentPage = ref(1)
+const pageSize = ref(10)
+const totalPages = computed(() => Math.ceil(poList.value.length / pageSize.value) || 1)
+const paginatedPoList = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return poList.value.slice(start, start + pageSize.value)
+})
+function handlePageChange(p) {
+  currentPage.value = p
+}
 
 let unsubscribe = null
 
@@ -190,11 +202,13 @@ async function confirmRejectPO() {
 </script>
 
 <template>
-  <div class="procurement-view pages-wrap">
+  <div class="procurement-view jinja pages-wrap">
     <div class="page-header">
-      <div class="header-content">
-        <h1 class="page-title">{{ pageTitle }}</h1>
-        <p class="page-subtitle">{{ pageSubtitle }}</p>
+      <div class="page-header-row">
+        <div class="page-title-block">
+          <h1 class="page-title">{{ pageTitle }}</h1>
+          <p class="page-subtitle">{{ pageSubtitle }}</p>
+        </div>
       </div>
     </div>
 
@@ -203,151 +217,92 @@ async function confirmRejectPO() {
       {{ actionError }}
     </div>
 
-    <div class="data-card">
-      <div v-if="loading" class="empty-state">
-        <div class="loading-spinner"></div>
-        <p>Loading Purchase Orders...</p>
-      </div>
-      <div v-else-if="!pendingStatusForRole" class="permission-denied">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="48"
-          height="48"
-          viewBox="0 0 24 24"
-          fill="none"
-          class="empty-icon"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </svg>
-        <p>You do not have permission to view PO Approvals.</p>
-      </div>
-      <div v-else-if="poList.length === 0" class="empty-state">
-        <div class="illustration-box">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="64"
-            height="64"
-            viewBox="0 0 24 24"
-            fill="none"
-            class="empty-icon"
-            stroke="currentColor"
-            stroke-width="1.2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <path d="m9 15 2 2 4-4" />
-          </svg>
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title-container">
+          <div class="panel-pill">Action Required</div>
+          <h2 class="panel-title-text">
+            Pending Review
+            <span class="count-chip">{{ poList.length }}</span>
+          </h2>
         </div>
-        <h3>Everything is up to date!</h3>
-        <p>No Purchase Orders are currently awaiting your action.</p>
       </div>
 
-      <div v-else class="table-container">
-        <table class="premium-table">
-          <thead>
-            <tr>
-              <th>PO Identification</th>
-              <th>Date Issued</th>
-              <th>Supplier / Vendor</th>
-              <th>Order Size</th>
-              <th style="text-align: center">Quick Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in poList" :key="r.id" class="table-row" @click="goToDetail(r.id)">
-              <td>
-                <div class="po-id-box">
-                  <span class="po-number-badge">{{ r.poNumber || '—' }}</span>
-                </div>
-              </td>
-              <td>
-                <span class="issued-date">{{ formatDate(r.orderedAt) }}</span>
-              </td>
-              <td class="supplier-cell">
-                <span class="supplier-name">{{ r.supplier || '—' }}</span>
-              </td>
-              <td>
-                <span class="item-count">{{ r.items?.length || 0 }} item(s)</span>
-              </td>
-              <td style="text-align: center" @click.stop>
-                <div class="actions-group">
-                  <button
-                    class="btn-icon-action view"
-                    title="View Details"
-                    @click="goToDetail(r.id)"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  </button>
-                  <template v-if="authStore?.role !== USER_ROLES.PURCHASER">
-                    <button
-                      class="btn-icon-action reject"
-                      title="Reject PO"
-                      :disabled="actionLoading"
-                      @click="handleRejectPO(r)"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
-                    </button>
-                    <button
-                      class="btn-icon-action approve"
-                      title="Approve PO"
-                      :disabled="actionLoading"
-                      @click="handleApprovePO(r)"
-                    >
-                      <div v-if="actionLoading" class="spinner-tiny-dark"></div>
-                      <svg
-                        v-else
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </button>
-                  </template>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="panel-body">
+        <div class="table-section">
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>PO Identification</th>
+                  <th>Date Issued</th>
+                  <th>Supplier / Vendor</th>
+                  <th style="text-align: center">Order Size</th>
+                  <th style="padding-right: 2rem; text-align: right">Quick Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="loading" class="loading-row">
+                  <td colspan="5" class="loading-cell text-center" style="padding: 3rem">
+                    <div class="spinner small" style="margin: 0 auto 1rem;"></div>
+                    <span>Loading Purchase Orders...</span>
+                  </td>
+                </tr>
+                <tr v-else-if="!pendingStatusForRole" class="empty-row">
+                  <td colspan="5" class="empty-cell text-center" style="padding: 3rem">
+                    <span>You do not have permission to view PO Approvals.</span>
+                  </td>
+                </tr>
+                <tr v-else-if="poList.length === 0" class="empty-row">
+                  <td colspan="5" class="empty-cell text-center" style="padding: 3rem; color: #64748b">
+                    <span>Everything is up to date! No Purchase Orders currently awaiting your action.</span>
+                  </td>
+                </tr>
+                <tr
+                  v-else
+                  v-for="r in paginatedPoList"
+                  :key="r.id"
+                  @click="goToDetail(r.id)"
+                  class="row-item"
+                >
+                  <td class="font-medium">
+                    <span class="po-number-badge">{{ r.poNumber || r.rfControlNo || '—' }}</span>
+                  </td>
+                  <td>{{ formatDate(r.orderedAt) }}</td>
+                  <td class="supplier-cell">{{ r.supplier || '—' }}</td>
+                  <td style="text-align: center">
+                     <span class="status-badge draft" style="text-transform: none; color: #64748b;">{{ r.items?.length || 0 }} item(s)</span>
+                  </td>
+                  <td class="workflow-cell">
+                    <div class="actions-group">
+                      <button class="btn-icon-action view" title="View Details" @click.stop="goToDetail(r.id)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                      <template v-if="authStore?.role !== USER_ROLES.PURCHASER">
+                        <button class="btn-icon-action reject" title="Reject PO" :disabled="actionLoading" @click.stop="handleRejectPO(r)">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                        </button>
+                        <button class="btn-icon-action approve" title="Approve PO" :disabled="actionLoading" @click.stop="handleApprovePO(r)">
+                           <div v-if="actionLoading" class="spinner-tiny-dark"></div>
+                           <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                        </button>
+                      </template>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <PaginationComponent
+            :current-page="currentPage"
+            :total-pages="totalPages"
+            :page-size="pageSize"
+            :total-items="poList.length"
+            :loading="loading"
+            @page-change="handlePageChange"
+          />
+        </div>
       </div>
     </div>
 
@@ -491,210 +446,228 @@ async function confirmRejectPO() {
   --surface-white: #ffffff;
 }
 
+.jinja {
+  --jinja-bg: #f8fafc;
+  --jinja-surface: #ffffff;
+  --jinja-border: #f1f5f9;
+  --jinja-text: #0f172a;
+  --jinja-muted: #64748b;
+  --jinja-radius: 12px;
+  --jinja-accent: #0ea5e9;
+}
+
 .pages-wrap {
   width: 100%;
-  padding: 1.5rem 2.5rem 2.5rem;
-  background: var(--brand-bg);
+  padding: 0.75rem 1.5rem 1.25rem;
+  background: var(--jinja-bg);
   height: calc(100vh - 64px);
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .page-header {
-  margin-bottom: 2rem;
-  padding-bottom: 1rem;
-  border-bottom: 2px solid var(--border-light);
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+}
+
+.page-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.page-title-block {
+  display: flex;
+  flex-direction: column;
 }
 
 .page-title {
   margin: 0;
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: var(--brand-navy);
-  letter-spacing: -0.01em;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.025em;
 }
 
 .page-subtitle {
-  margin: 0.35rem 0 0;
-  font-size: 0.95rem;
-  color: var(--text-muted);
-  font-weight: 400;
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+  color: #64748b;
+  font-weight: 500;
 }
 
-.flash-error {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
-  padding: 1rem 1.25rem;
-  border-radius: 10px;
-  margin-bottom: 1.5rem;
-  font-size: 0.9rem;
+.panel {
+  flex: 1;
+  background: var(--jinja-surface);
+  border: 1px solid var(--jinja-border);
+  border-radius: var(--jinja-radius);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.panel-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--jinja-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--jinja-surface);
+  flex-shrink: 0;
+}
+
+.panel-pill {
+  display: inline-block;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--jinja-accent);
+  background: #f0f9ff;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  margin-bottom: 0.5rem;
+}
+
+.panel-title-text {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 800;
+  color: #1e293b;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  font-weight: 500;
-  box-shadow: 0 2px 4px rgba(185, 28, 28, 0.05);
+  gap: 0.625rem;
 }
 
-.data-card {
-  background: var(--surface-white);
-  border: 1px solid var(--border-light);
-  border-radius: 16px;
-  box-shadow:
-    0 10px 15px -3px rgba(0, 0, 0, 0.04),
-    0 4px 6px -2px rgba(0, 0, 0, 0.02);
+.count-chip {
+  font-size: 0.75rem;
+  background: var(--jinja-border);
+  color: var(--jinja-muted);
+  padding: 0.125rem 0.625rem;
+  border-radius: 9999px;
+  font-weight: 600;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.table-section {
+  flex: 1;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  margin-bottom: 2rem;
-  flex: 1;
   min-height: 0;
 }
 
 .table-container {
   flex: 1;
-  min-height: 0;
-  overflow: auto;
-  scrollbar-width: thin;
+  overflow-y: scroll;
   scrollbar-gutter: stable;
+  min-height: 0;
 }
 
-.premium-table {
+.table-container::-webkit-scrollbar {
+  width: 10px;
+}
+.table-container::-webkit-scrollbar-track {
+  background: var(--jinja-border);
+}
+.table-container::-webkit-scrollbar-thumb {
+  background: var(--jinja-muted);
+  border-radius: 10px;
+  border: 2px solid var(--jinja-border);
+}
+
+.data-table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  text-align: left;
-  min-width: 800px;
 }
 
-.premium-table th {
-  background: #f1f5f9;
-  color: var(--brand-navy);
-  font-weight: 700;
-  padding: 1.25rem 1.5rem;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--border-light);
-  white-space: nowrap;
+.data-table th {
   position: sticky;
   top: 0;
   z-index: 10;
+  background: #f8fafc;
+  padding: 0.875rem 1.25rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+  border-bottom: 2px solid var(--jinja-border);
 }
 
-.premium-table td {
-  padding: 1.25rem 1.5rem;
-  border-bottom: 1px solid #f1f5f9;
+.data-table td {
+  padding: 0.875rem 1.25rem;
+  font-size: 0.9375rem;
+  color: var(--jinja-text);
+  border-bottom: 1px solid var(--jinja-border);
   vertical-align: middle;
-  color: var(--text-main);
-  font-size: 0.9rem;
-  transition: background 0.15s ease;
 }
 
-.table-row {
+.data-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.row-item {
   cursor: pointer;
+  transition: background-color 0.2s;
 }
 
-.table-row:hover td {
-  background: #f0f9ff;
-}
-
-.premium-table tr:last-child td {
-  border-bottom: none;
-}
-
-/* Row elements */
-.po-number-badge {
-  display: inline-block;
-  background: #eff6ff;
-  color: var(--brand-primary);
-  padding: 0.35rem 0.75rem;
-  border-radius: 8px;
-  font-family: 'JetBrains Mono', 'Roboto Mono', monospace;
+.font-medium {
   font-weight: 700;
-  font-size: 0.85rem;
-  border: 1px solid #dbeafe;
-  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.05);
+  color: #0f172a;
 }
 
-.issued-date {
-  font-weight: 500;
-  color: var(--text-muted);
+.po-number-badge {
+  color: #0f172a;
 }
 
-.supplier-name {
+.supplier-cell {
   font-weight: 600;
-  color: var(--text-main);
 }
 
-.item-count {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  background: #f1f5f9;
-  padding: 0.25rem 0.65rem;
-  border-radius: 20px;
-}
-
-.actions-group {
-  display: flex;
-  gap: 0.75rem;
-  justify-content: flex-end;
-}
-
-/* Action Buttons */
-.btn-action {
+.status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1rem;
-  border-radius: 10px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  border: 1px solid transparent;
+  padding: 0.25rem 0.625rem;
+  border-radius: 6px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
-.btn-action.view {
-  background: #ffffff;
-  border-color: var(--border-light);
-  color: var(--text-main);
+.status-badge.draft {
+  background: var(--jinja-border);
+  color: #475569;
 }
 
-.btn-action.view:hover {
-  background: #f1f5f9;
-  border-color: var(--brand-primary);
-  color: var(--brand-primary);
-  transform: translateY(-1px);
+.workflow-cell {
+  text-align: right;
+  padding-right: 1.5rem;
 }
 
-.btn-action.approve {
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  color: #ffffff;
-  box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
-}
-
-.btn-action.approve:hover:not(:disabled) {
-  transform: translateY(-1.5px);
-  box-shadow: 0 6px 12px rgba(37, 99, 235, 0.3);
-  filter: brightness(1.1);
-}
-
-/* OLD text button styles kept for reference but overridden below */
-
-/* Icon-only action buttons */
 .actions-group {
   display: flex;
   gap: 0.5rem;
-  justify-content: center;
+  justify-content: flex-end;
   align-items: center;
 }
 
 .btn-icon-action {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   border: none;
   display: flex;
   align-items: center;
@@ -712,104 +685,41 @@ async function confirmRejectPO() {
   box-shadow: none !important;
 }
 
-/* Grey — View Details */
+/* Grey — View */
 .btn-icon-action.view {
-  background: #f1f5f9;
+  background: var(--jinja-border);
   color: #64748b;
 }
-
 .btn-icon-action.view:hover:not(:disabled) {
   background: #e2e8f0;
-  color: #1e293b;
-  transform: scale(1.1);
+  color: #0f172a;
 }
 
 /* Red — Reject */
 .btn-icon-action.reject {
   background: #fef2f2;
-  color: #dc2626;
+  color: #ef4444;
 }
-
 .btn-icon-action.reject:hover:not(:disabled) {
-  background: #dc2626;
+  background: #ef4444;
   color: #fff;
-  transform: scale(1.1);
-  box-shadow: 0 4px 10px rgba(220, 38, 38, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.2);
 }
 
 /* Green — Approve */
 .btn-icon-action.approve {
   background: #ecfdf5;
-  color: #059669;
+  color: #10b981;
 }
-
 .btn-icon-action.approve:hover:not(:disabled) {
-  background: #059669;
+  background: #10b981;
   color: #fff;
-  transform: scale(1.1);
-  box-shadow: 0 4px 10px rgba(5, 150, 105, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2);
 }
 
 .spinner-tiny-dark {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(5, 150, 105, 0.3);
-  border-top-color: #059669;
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-
-/* Empty States & Loading */
-.empty-state,
-.permission-denied {
-  padding: 5rem 2rem;
-  text-align: center;
-  color: var(--text-muted);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-}
-
-.empty-state h3 {
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-main);
-  font-weight: 600;
-}
-
-.empty-state p {
-  margin: 0;
-  max-width: 300px;
-  line-height: 1.5;
-}
-
-.illustration-box {
-  width: 100px;
-  height: 100px;
-  background: #eff6ff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--brand-primary);
-  margin-bottom: 0.5rem;
-}
-
-.empty-icon {
-  opacity: 0.7;
-}
-
-.loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid #f1f5f9;
-  border-top-color: var(--brand-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.spinner-tiny {
   width: 14px;
   height: 14px;
   border: 2px solid rgba(255, 255, 255, 0.3);
@@ -818,21 +728,27 @@ async function confirmRejectPO() {
   animation: spin 0.6s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #0ea5e9;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  display: inline-block;
 }
 
-@media (max-width: 768px) {
-  .pages-wrap {
-    padding: 1rem 1.25rem;
-  }
-  .actions-group {
-    flex-direction: column;
-    align-items: stretch;
-  }
+.spinner.small {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
 }
+
+.premium-table tr:last-child td {
+  border-bottom: none;
+}
+
+
 
 /* Modal Styling - Professional standard */
 .confirm-overlay {

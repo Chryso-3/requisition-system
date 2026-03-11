@@ -767,7 +767,6 @@ onMounted(load)
       <div class="page-header">
         <div class="header-main">
           <h1 class="page-title">Transaction Log</h1>
-          <p class="page-subtitle">Digital accountability and tampering detection trail.</p>
         </div>
       </div>
 

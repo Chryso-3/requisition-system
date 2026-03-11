@@ -44,29 +44,10 @@ const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
 const isBACSecretary = computed(() => authStore?.role === USER_ROLES.BAC_SECRETARY)
 const isSuperAdmin = computed(() => authStore?.role === USER_ROLES.SUPER_ADMIN)
 
-async function loadPendingCount() {
+function loadPendingCount() {
   if (!isApprover.value) return
-  try {
-    // 1. Requisition Pending Count (Real-time listener)
-    notificationStore.initNotificationListener()
-
-    // 2. PO Pending Count
-    let poStatusFilter = null
-    if (authStore?.role === USER_ROLES.BUDGET_OFFICER) poStatusFilter = 'pending_budget'
-    else if (authStore?.role === USER_ROLES.INTERNAL_AUDITOR) poStatusFilter = 'pending_audit'
-    else if (authStore?.role === USER_ROLES.GENERAL_MANAGER) poStatusFilter = 'pending_gm'
-
-    if (poStatusFilter) {
-      const poReqs = await listRequisitionsSimple({ poStatus: poStatusFilter })
-      pendingPOCount.value = poReqs.length
-    } else {
-      pendingPOCount.value = 0
-    }
-  } catch (err) {
-    console.error('Error loading pending counts:', err)
-    pendingCount.value = 0
-    pendingPOCount.value = 0
-  }
+  // The store handles both RF and PO listeners in one call
+  notificationStore.initNotificationListener()
 }
 
 async function onSignOut() {
@@ -109,8 +90,13 @@ function handleClickOutside(event) {
   }
 }
 
-function handleNotificationClick(id) {
-  router.push(`/requisitions/${id}`)
+function handleNotificationClick(notif) {
+  // PO notifications belong on the PO approvals page
+  if (notif._type === 'po') {
+    router.push('/po-approvals')
+  } else {
+    router.push(`/requisitions/${notif.id}`)
+  }
   showNotificationMenu.value = false
 }
 
@@ -274,10 +260,7 @@ watch(
                 />
               </svg>
             </span>
-            <span class="nav-text">
-              All Requisitions
-              <span v-if="pendingCount > 0" class="badge">{{ pendingCount }}</span>
-            </span>
+            <span class="nav-text">All Requisitions</span>
           </router-link>
           <router-link
             v-if="
@@ -323,10 +306,7 @@ watch(
                 />
               </svg>
             </span>
-            <span class="nav-text">
-              PO Approvals
-              <span v-if="pendingPOCount > 0" class="badge">{{ pendingPOCount }}</span>
-            </span>
+            <span class="nav-text">PO Approvals</span>
           </router-link>
           <router-link
             v-if="isGeneralManager"
@@ -724,16 +704,18 @@ watch(
                   <template v-else-if="notificationStore.notifications.length > 0">
                     <div
                       v-for="notif in notificationStore.notifications"
-                      :key="notif.id"
+                      :key="notif.id + (notif._type || '')"
                       class="notification-item"
-                      @click="handleNotificationClick(notif.id)"
+                      @click="handleNotificationClick(notif)"
                     >
-                      <div class="notif-icon">📄</div>
+                      <div class="notif-icon">{{ notif._type === 'po' ? '🧾' : '📄' }}</div>
                       <div class="notif-content">
                         <div class="notif-title">
-                          {{ notif.controlNumber || 'New Requisition' }}
+                          {{ notif.rfControlNo || notif.controlNumber || 'New Requisition' }}
                         </div>
-                        <div class="notif-subtitle">From {{ notif.requestedBy?.name }}</div>
+                        <div class="notif-subtitle">
+                          {{ notif._type === 'po' ? 'PO Pending Approval' : 'From ' + (notif.requestedBy?.name || '—') }}
+                        </div>
                       </div>
                     </div>
                   </template>

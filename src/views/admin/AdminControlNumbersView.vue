@@ -74,7 +74,6 @@ onMounted(fetchCounters)
     <header class="page-header">
       <div class="header-content">
         <h1 class="page-title">Control Number Manager</h1>
-        <p class="page-subtitle">View and manually override requisition counter sequences</p>
       </div>
       <div class="header-actions">
         <button @click="fetchCounters" class="btn-refresh" :disabled="loading">

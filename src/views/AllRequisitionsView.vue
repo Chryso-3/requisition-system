@@ -114,9 +114,50 @@ const filteredRequisitions = computed(() => {
 const totalPages = computed(() => Math.ceil(totalItems.value / pageSize.value) || 1)
 const paginatedRequisitions = computed(() => filteredRequisitions.value)
 
-// Inbox/History counts for approvers (now derived from summary or just the current list for simplicity)
-const inboxCount = ref(0)
-const historyCount = ref(0)
+// Inbox/History counts for approvers
+const inboxCount = computed(() => {
+  const w = approverWorkflow.value
+  if (!w) return 0
+  const isManager = [
+    USER_ROLES.SECTION_HEAD,
+    USER_ROLES.DIVISION_HEAD,
+    USER_ROLES.DEPARTMENT_HEAD,
+  ].includes(authStore.role)
+  
+  return requisitions.value.filter((r) => {
+    const statusMatch = r.status === w.canApproveStatus
+    if (!statusMatch) return false
+    if (isManager) {
+      return r.assignedApproverId === authStore.user?.uid
+    }
+    return true
+  }).length
+})
+
+const historyCount = computed(() => {
+  const w = approverWorkflow.value
+  if (!w) return 0
+  const myId = authStore.user?.uid
+  
+  return requisitions.value.filter((r) => {
+    const approvedByMe = r?.[w.field]?.userId && r?.[w.field]?.userId === myId
+    const declinedByMe = r?.rejectedBy?.userId && r?.rejectedBy?.userId === myId
+    const matchesAction = !!(approvedByMe || declinedByMe)
+
+    const isManager = [
+      USER_ROLES.SECTION_HEAD,
+      USER_ROLES.DIVISION_HEAD,
+      USER_ROLES.DEPARTMENT_HEAD,
+    ].includes(authStore.role)
+    
+    if (isManager) {
+      const deptMatch = r.department?.trim().toUpperCase() === authStore.department?.trim().toUpperCase()
+      const assignedToMe = r.assignedApproverId === myId
+      return (approvedByMe || declinedByMe || assignedToMe) && deptMatch
+    }
+    return matchesAction
+  }).length
+})
 
 const headerSubtitle = computed(() => {
   const w = approverWorkflow.value

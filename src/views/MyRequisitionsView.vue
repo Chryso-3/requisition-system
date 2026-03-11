@@ -54,13 +54,16 @@ const statusLabel = {
   [REQUISITION_STATUS.REJECTED]: 'Rejected',
 }
 
-const isGM = computed(() => authStore?.role === USER_ROLES.GENERAL_MANAGER)
+const isGlobalRole = computed(() =>
+  [USER_ROLES.GENERAL_MANAGER, USER_ROLES.SUPER_ADMIN].includes(authStore.role),
+)
 
 const combinedRequisitions = computed(() => [...requisitions.value, ...moreRequisitions.value])
 
 const myRequisitions = computed(() => {
   if (!authStore?.user) return []
-  if (isGM.value) return combinedRequisitions.value
+  if (isGlobalRole.value) return combinedRequisitions.value
+  // Everyone else (Managers/Requestors) sees only their own personal records in this view
   return combinedRequisitions.value.filter((r) => r.requestedBy?.userId === authStore?.user?.uid)
 })
 
@@ -121,9 +124,9 @@ watch([filterStatus, searchKeywords, pageSize], () => {
 })
 
 const stats = computed(() => {
-  if (isGM.value && globalStats.value) {
+  if (isGlobalRole.value && globalStats.value) {
     const s = globalStats.value
-    // GM sees global summary
+    // Global role sees global summary
     const pendingTotal = Object.entries(s.byStatus || {})
       .filter(([status]) => status.startsWith('pending_'))
       .reduce((sum, [, count]) => sum + count, 0)
@@ -136,7 +139,7 @@ const stats = computed(() => {
     }
   }
 
-  // Regular user sees their specific stats
+  // Regular user/manager sees their specific personal stats
   return {
     total: userStats.value.total,
     draft: userStats.value.draft,
@@ -146,10 +149,13 @@ const stats = computed(() => {
 })
 
 async function refreshUserStats() {
-  if (isGM.value || !authStore?.user) return
+  if (isGlobalRole.value || !authStore?.user) return
   try {
-    const data = await getUserRequisitionStats(authStore?.user?.uid)
-    if (data) userStats.value = data
+    // Everyone except GM/Admin sees their OWN stats
+    import('@/services/requisitionService').then(async (m) => {
+      const data = await m.getUserRequisitionStats(authStore.user.uid)
+      if (data) userStats.value = data
+    })
   } catch (e) {
     console.warn('Failed to fetch user stats:', e)
   }
@@ -201,13 +207,13 @@ function startRealtime() {
   lastDoc.value = null
   hasMore.value = false
 
-  const filters = isGM.value ? {} : { requestedBy: authStore?.user?.uid }
+  // Filters: Strictly personal for everyone except GM/Admin
+  const filters = isGlobalRole.value ? {} : { requestedBy: authStore?.user?.uid }
+
   if (filterStatus.value) {
     if (filterStatus.value === 'received') {
       filters.purchaseStatus = 'received'
     } else if (filterStatus.value !== 'pending') {
-      // 'pending' is a client-side sentinel for all pending_* statuses;
-      // Firestore can't do startsWith, so we fetch all and filter client-side.
       filters.status = filterStatus.value
     }
   }
@@ -236,7 +242,7 @@ async function loadMore() {
   if (!lastDoc.value || loadingMore.value || !hasMore.value) return
   loadingMore.value = true
   try {
-    const filters = isGM.value ? {} : { requestedBy: authStore?.user?.uid }
+    const filters = isGlobalRole.value ? {} : { requestedBy: authStore?.user?.uid }
     if (filterStatus.value) {
       if (filterStatus.value === 'received') {
         filters.purchaseStatus = 'received'
@@ -277,7 +283,7 @@ watch(
 
     // Handle stats based on role
     if (unsubscribeStats) unsubscribeStats()
-    if (isGM.value) {
+    if (isGlobalRole.value) {
       unsubscribeStats = subscribeAnalyticsSummary((data) => {
         globalStats.value = data
       })
@@ -290,19 +296,19 @@ watch(
 )
 
 // Watch filters or role changes to restart subscription
-watch([filterStatus, isGM], (newVal, oldVal) => {
+watch([filterStatus, isGlobalRole], (newVal, oldVal) => {
   if (authStore.loading || !authStore.user) return
 
   currentPage.value = 1
   startRealtime()
 
   // Handle GM role switch for stats listeners
-  const [newFilter, newGM] = newVal
-  const [, oldGM] = oldVal || []
+  const [newFilter, newRole] = newVal
+  const [, oldRole] = oldVal || []
 
-  if (newGM !== oldGM) {
+  if (newRole !== oldRole) {
     if (unsubscribeStats) unsubscribeStats()
-    if (newGM) {
+    if (newRole) {
       unsubscribeStats = subscribeAnalyticsSummary((data) => {
         globalStats.value = data
       })
@@ -323,7 +329,7 @@ onUnmounted(() => {
   <div class="my-requisitions jinja">
     <div class="page-header">
       <h1 class="page-title">My requisitions</h1>
-      <p v-if="isGM" class="page-subtitle">
+      <p v-if="isGlobalRole" class="page-subtitle">
         View only — you can open requisitions to see details and approve when pending your approval.
       </p>
     </div>
@@ -467,7 +473,7 @@ onUnmounted(() => {
               </option>
             </select>
           </div>
-          <button v-if="!isGM" class="btn-primary glint" @click="createNew">
+          <button v-if="!isGlobalRole" class="btn-primary glint" @click="createNew">
             <span class="btn-icon">＋</span>
             New Request
           </button>
@@ -509,7 +515,11 @@ onUnmounted(() => {
                       >No requisitions match your filter. Create your first to get started.</span
                     >
                     <span v-else>No requisitions match your filter.</span>
-                    <button v-if="!isGM" class="btn-primary inline-btn" @click.stop="createNew">
+                    <button
+                      v-if="!isGlobalRole"
+                      class="btn-primary inline-btn"
+                      @click.stop="createNew"
+                    >
                       <span class="btn-icon">+</span>
                       Create Requisition
                     </button>

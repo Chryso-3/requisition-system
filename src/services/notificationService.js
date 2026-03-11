@@ -111,10 +111,11 @@ export async function notifyRequestorUpdate(requisition, status, remarks = '', n
   console.log('[Notification] Target email:', email)
 
   const isApproved = status === 'approved'
+  const isPOApproved = status === 'po_approved'
   const isRejected = status === 'rejected' || status === 'declined'
-  const isStepUpdate = !isApproved && !isRejected
+  const isStepUpdate = !isApproved && !isPOApproved && !isRejected
 
-  let subject = `[Update] Requisition ${requisition.rfControlNo} - ${status.toUpperCase()}`
+  let subject = `[Update] Requisition ${requisition.rfControlNo} - Status Update`
   let headerGradient = 'linear-gradient(135deg, #1e293b 0%, #334155 100%)' // Default Slate
   let statusText = status.toUpperCase()
   let statusColor = '#1e293b'
@@ -125,13 +126,19 @@ export async function notifyRequestorUpdate(requisition, status, remarks = '', n
     headerGradient = 'linear-gradient(135deg, #065f46 0%, #059669 100%)' // Success Green
     statusColor = '#059669'
     mainTitle = 'Fully Approved'
+  } else if (isPOApproved) {
+    subject = `[PO Approved] Purchase Order for ${requisition.rfControlNo} is Signed`
+    headerGradient = 'linear-gradient(135deg, #0c4a6e 0%, #0284c7 100%)' // Sky Blue
+    statusColor = '#0284c7'
+    mainTitle = 'Purchase Order Approved'
+    statusText = 'PO APPROVED'
   } else if (isRejected) {
     subject = `[Action Required] Requisition ${requisition.rfControlNo} was REJECTED`
     headerGradient = 'linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%)' // Danger Red
     statusColor = '#b91c1c'
     mainTitle = 'Action Required'
   } else if (isStepUpdate) {
-    subject = `[Update] Requisition ${requisition.rfControlNo} - Moving Forward`
+    subject = `[Update] Requisition ${requisition.rfControlNo} - Moving to ${nextRole || 'Next Step'}`
     headerGradient = 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)' // Info Blue
     statusColor = '#2563eb'
     mainTitle = 'Moving to Next Step'
@@ -202,12 +209,15 @@ export async function notifyRequestorUpdate(requisition, status, remarks = '', n
 
 /**
  * Notifies the BAC Secretary of a new Canvass submission
+ * @param {object} requisition The requisition document
+ * @param {string|string[]} emails Target emails
  */
-export async function notifyBACNewCanvass(requisition) {
+export async function notifyBACNewCanvass(requisition, emails) {
+  if (!emails) return
+  const emailList = Array.isArray(emails) ? emails : [emails]
+  if (emailList.length === 0) return
+
   const subject = `[New Canvass] Ready for PO Issuance - ${requisition.rfControlNo}`
-  // In a real scenario, you'd fetch the BAC Secretary's email from Firestore.
-  // For now, we'll assume there's a collective or targeted email.
-  const bacEmail = 'bac@leyeco3.com'
 
   const htmlBody = `
     <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);">
@@ -244,7 +254,8 @@ export async function notifyBACNewCanvass(requisition) {
     </div>
   `
 
-  return sendEmailRelay({ to: bacEmail, subject, htmlBody })
+  const promises = emailList.map((email) => sendEmailRelay({ to: email, subject, htmlBody }))
+  return Promise.allSettled(promises)
 }
 
 /**

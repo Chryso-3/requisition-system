@@ -96,13 +96,24 @@ function closeSaveConfirm() {
 watch(
   () => form.department,
   async (newDept) => {
+    // Immediately clear stale data to avoid showing managers/positions from the previous department
+    availableManagers.value = []
+
+    // In creation mode, always reset. In edit mode, only reset if the department actually changed
+    // (to prevent clearing on initial load of existing requisition)
+    const isInitialLoad = isEditing.value && props.requisition?.department === newDept
+    if (!isInitialLoad) {
+      form.assignedApproverId = ''
+    }
+
     if (newDept) {
       fetchingManagers.value = true
       try {
         const managers = await getDepartmentManagers(newDept)
         availableManagers.value = managers
-        // If editing and managers are loaded, don't reset unless current isn't in list
-        if (!isEditing.value || !managers.find((m) => m.uid === form.assignedApproverId)) {
+
+        // Final safety check: if the newly loaded list doesn't contain the current ID, clear it
+        if (form.assignedApproverId && !managers.find((m) => m.uid === form.assignedApproverId)) {
           form.assignedApproverId = ''
         }
       } catch (e) {
@@ -110,9 +121,6 @@ watch(
       } finally {
         fetchingManagers.value = false
       }
-    } else {
-      availableManagers.value = []
-      form.assignedApproverId = ''
     }
   },
 )

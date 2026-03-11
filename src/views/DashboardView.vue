@@ -82,32 +82,52 @@ async function load() {
         REQUISITION_STATUS.PENDING_AUDIT,
         REQUISITION_STATUS.PENDING_APPROVAL,
       ]
-      const workflowStatus = approverWorkflow.value?.canApproveStatus
-      const isManager = [
-        USER_ROLES.SECTION_HEAD,
-        USER_ROLES.DIVISION_HEAD,
-        USER_ROLES.DEPARTMENT_HEAD,
-      ].includes(authStore.role)
-      const commonFilters =
-        isManager && authStore.department
-          ? { department: authStore.department, assignedApproverId: uid }
-          : {}
+      const isGlobalRole = [USER_ROLES.GENERAL_MANAGER, USER_ROLES.SUPER_ADMIN].includes(
+        authStore.role,
+      )
 
-      const [total, pendingApp, totalPending, approved, rejected] = await Promise.all([
-        getRequisitionCount(commonFilters),
-        workflowStatus
-          ? getRequisitionCount({ ...commonFilters, status: workflowStatus })
-          : Promise.resolve(0),
-        getRequisitionCount({ ...commonFilters, status: pendingStatuses }),
-        getRequisitionCount({ ...commonFilters, status: REQUISITION_STATUS.APPROVED }),
-        getRequisitionCount({ ...commonFilters, status: REQUISITION_STATUS.REJECTED }),
-      ])
-      stats.value = {
-        total,
-        pendingApproval: pendingApp,
-        pending: totalPending,
-        approved,
-        rejected,
+      // Personalized vs. Global logic:
+      // - If Global Role: See company-wide totals
+      // - If Other (Manager/Requestor): See only YOUR OWN submissions for Volume/Approved/Rejected
+      // - Managers also see "Active Approval" for items assigned to them
+
+      if (isGlobalRole) {
+        const [total, pendingApp, totalPending, approved, rejected] = await Promise.all([
+          getRequisitionCount({}),
+          workflowStatus ? getRequisitionCount({ status: workflowStatus }) : Promise.resolve(0),
+          getRequisitionCount({ status: pendingStatuses }),
+          getRequisitionCount({ status: REQUISITION_STATUS.APPROVED }),
+          getRequisitionCount({ status: REQUISITION_STATUS.REJECTED }),
+        ])
+        stats.value = {
+          total,
+          pendingApproval: pendingApp,
+          pending: totalPending,
+          approved,
+          rejected,
+        }
+      } else {
+        // Everyone else (Managers/Requestors) sees their OWN records for general stats
+        const personalFilter = { requestedBy: uid }
+        const assignedFilter =
+          approverWorkflow.value && authStore.department
+            ? { department: authStore.department, assignedApproverId: uid, status: workflowStatus }
+            : null
+
+        const [total, pendingApp, totalPending, approved, rejected] = await Promise.all([
+          getRequisitionCount(personalFilter),
+          assignedFilter ? getRequisitionCount(assignedFilter) : Promise.resolve(0),
+          getRequisitionCount({ ...personalFilter, status: pendingStatuses }),
+          getRequisitionCount({ ...personalFilter, status: REQUISITION_STATUS.APPROVED }),
+          getRequisitionCount({ ...personalFilter, status: REQUISITION_STATUS.REJECTED }),
+        ])
+        stats.value = {
+          total,
+          pendingApproval: pendingApp,
+          pending: totalPending,
+          approved,
+          rejected,
+        }
       }
     }
   } catch (e) {

@@ -690,6 +690,9 @@ export const createRequisition = (data = {}) => ({
   canvassStatus: data.canvassStatus ?? null,
 
   // Approval workflow - user IDs and timestamps
+  assignedApproverId: data.assignedApproverId ?? null,
+  assignedApproverName: data.assignedApproverName ?? null,
+  assignedApproverRole: data.assignedApproverRole ?? null,
   requestedBy: data.requestedBy ?? null, // { userId, name, signedAt }
   recommendingApproval: data.recommendingApproval ?? null, // { userId, name, title, signedAt }
   inventoryChecked: data.inventoryChecked ?? null, // { userId, name, title, signedAt }
@@ -909,6 +912,24 @@ export async function markRequisitionOrdered(
     snapshot,
   )
 
+  // Notification: Notify Budget Officer + Inform Requestor
+  try {
+    const reqWithEmail = await ensureRequestorEmail(current)
+    const budgetEmails = await getEmailsByRole(USER_ROLES.BUDGET_OFFICER)
+    if (budgetEmails.length > 0) {
+      await notificationService.notifyPOAction(reqWithEmail, 'Budget Officer', budgetEmails)
+    }
+    // Inform the requestor their item is now in the PO approval stage
+    await notificationService.notifyRequestorUpdate(
+      reqWithEmail,
+      'Step Approved',
+      '',
+      'PO Budget Review',
+    )
+  } catch (e) {
+    console.error('PO Creation notification error:', e)
+  }
+
   return getRequisition(requisitionId)
 }
 
@@ -966,12 +987,20 @@ export async function approvePOBudget(requisitionId, user, signatureData) {
       },
     )
 
-    // Notification: Notify Internal Auditor for PO Review
+    // Notification: Notify Internal Auditor for PO Review + Update Requestor
     try {
+      const reqWithEmail = await ensureRequestorEmail(current)
       const auditorEmails = await getEmailsByRole(USER_ROLES.INTERNAL_AUDITOR)
       if (auditorEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'Internal Audit', auditorEmails)
+        await notificationService.notifyPOAction(reqWithEmail, 'Internal Audit', auditorEmails)
       }
+      // Keep requestor in the loop
+      await notificationService.notifyRequestorUpdate(
+        reqWithEmail,
+        'Step Approved',
+        '',
+        'Internal Audit',
+      )
     } catch (e) {
       console.error('PO Budget approval notification error:', e)
     }
@@ -1032,12 +1061,20 @@ export async function approvePOAudit(requisitionId, user, signatureData) {
       },
     )
 
-    // Notification: Notify GM for PO Review
+    // Notification: Notify GM for PO Review + Update Requestor
     try {
+      const reqWithEmail = await ensureRequestorEmail(current)
       const gmEmails = await getEmailsByRole(USER_ROLES.GENERAL_MANAGER)
       if (gmEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'General Manager', gmEmails)
+        await notificationService.notifyPOAction(reqWithEmail, 'General Manager', gmEmails)
       }
+      // Keep requestor in the loop
+      await notificationService.notifyRequestorUpdate(
+        reqWithEmail,
+        'Step Approved',
+        '',
+        'General Manager',
+      )
     } catch (e) {
       console.error('PO Audit approval notification error:', e)
     }
@@ -1100,13 +1137,25 @@ export async function approvePOGM(requisitionId, user, signatureData) {
       },
     )
 
-    // Notification: Notify BAC Secretary (Ready to Print) and Requestor
+    // Notification: Notify BAC Secretary (Ready to Print), Purchaser (for delivery), and Requestor
     try {
+      const reqWithEmail = await ensureRequestorEmail(current)
+      // Notify BAC Secretary the PO is fully signed
       const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
       if (bacEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'BAC Secretary', bacEmails)
+        await notificationService.notifyPOAction(reqWithEmail, 'BAC Secretary', bacEmails)
       }
-      notificationService.notifyRequestorUpdate(current, 'PO approved')
+      // Notify Purchaser to proceed with receiving delivery
+      const purchaserEmails = await getEmailsByRole(USER_ROLES.PURCHASER)
+      if (purchaserEmails.length > 0) {
+        await notificationService.notifyNextApprover(
+          reqWithEmail,
+          'Purchaser (For Delivery)',
+          purchaserEmails,
+        )
+      }
+      // Notify the requestor the PO is fully approved
+      await notificationService.notifyRequestorUpdate(reqWithEmail, 'po_approved')
     } catch (e) {
       console.error('PO GM approval notification error:', e)
     }
@@ -1160,7 +1209,7 @@ export async function rejectPO(requisitionId, user, { remarks, step }) {
     try {
       const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
       if (bacEmails.length > 0) {
-        notificationService.notifyPOAction(current, 'Correction Needed', bacEmails)
+        await notificationService.notifyPOAction(current, 'Correction Needed', bacEmails)
       }
     } catch (e) {
       console.error('PO rejection notification error:', e)
@@ -1232,6 +1281,24 @@ export async function markRequisitionCanvassed(
     snapshot,
   )
 
+  // Notification: Notify BAC Secretary + Inform Requestor
+  try {
+    const reqWithEmail = await ensureRequestorEmail(current)
+    const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
+    if (bacEmails.length > 0) {
+      await notificationService.notifyBACNewCanvass(reqWithEmail, bacEmails)
+    }
+    // Tell the requestor that their requisition is now in the canvassing/BAC phase
+    await notificationService.notifyRequestorUpdate(
+      reqWithEmail,
+      'Step Approved',
+      '',
+      'BAC (Canvass)',
+    )
+  } catch (e) {
+    console.error('[markRequisitionCanvassed] BAC notification error:', e)
+  }
+
   return getRequisition(requisitionId)
 }
 
@@ -1279,7 +1346,7 @@ export async function submitRequisitionToBAC(requisitionId, { submittedBy }) {
   try {
     const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
     if (bacEmails.length > 0) {
-      notificationService.notifyBACNewCanvass(current)
+      await notificationService.notifyBACNewCanvass(current, bacEmails)
     }
   } catch (e) {
     console.error('BAC submission notification error:', e)
@@ -2409,8 +2476,8 @@ export async function approveRequisition(id, approver, role) {
       // Step-by-Step Notification: Inform requestor it moved to the next role
       await notificationService.notifyRequestorUpdate(reqWithEmail, 'Step Approved', '', nextRole)
     } else if (workflow.nextStatus === REQUISITION_STATUS.APPROVED) {
-      // Final Approval
-      await notificationService.notifyRequestorUpdate(reqWithEmail, 'approved')
+      // Final Approval: Inform requestor and explicitly mention Purchaser phase
+      await notificationService.notifyRequestorUpdate(reqWithEmail, 'approved', '', 'Purchaser')
       // Notify Purchaser
       const purchaserEmails = await getEmailsByRole(USER_ROLES.PURCHASER)
       if (purchaserEmails.length > 0) {
@@ -2741,6 +2808,47 @@ export function subscribeRequisitions(filters, callback, onError, opts = {}) {
       if (onError) onError(err)
     },
   )
+}
+
+/**
+ * Get aggregated statistics for a department manager.
+ * Returns counts for department total, personal drafts, and personal active approvals.
+ */
+export async function getDepartmentManagerStats(dept, userId, activeStatus) {
+  if (!dept || !userId) return null
+  const base = collection(db, COLLECTIONS.REQUISITIONS)
+  const targetDept = dept.trim().toUpperCase()
+
+  const queries = {
+    total: query(base, where('department', '==', targetDept)),
+    draft: query(
+      base,
+      where('requestedBy.userId', '==', userId),
+      where('status', '==', REQUISITION_STATUS.DRAFT),
+    ),
+    approved: query(
+      base,
+      where('department', '==', targetDept),
+      where('status', '==', REQUISITION_STATUS.APPROVED),
+    ),
+    // Active is anything in the department assigned specifically to this user
+    pending: query(
+      base,
+      where('department', '==', targetDept),
+      where('assignedApproverId', '==', userId),
+      where('status', '==', activeStatus),
+    ),
+  }
+
+  const results = {}
+  await Promise.all(
+    Object.entries(queries).map(async ([key, q]) => {
+      const snapshot = await getCountFromServer(q)
+      results[key] = snapshot.data().count
+    }),
+  )
+
+  return results
 }
 
 /**

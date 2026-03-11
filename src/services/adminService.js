@@ -209,33 +209,47 @@ export async function updateSupplier(id, updates) {
 }
 /**
  * API for Fetching Managers by Department (For Direct Assignment)
- * Fetches all users in the department PLUS OGM (Office of General Manager) users
- * since they act as global approvers. Filters in JS for robustness.
+ * Fetches all users in the department. OGM (Office of General Manager) users
+ * are typically handled via status-based broadcasts, so for DIRECT assignment
+ * we focus on Section/Division/Department heads.
+ *
+ * NOTE: Using a query for roles first, then filtering by department in memory
+ * to handle case-insensitivity and whitespace issues robustly.
  */
-export async function getDepartmentManagers(dept) {
+export async function getDepartmentManagers(dept, includeGM = false) {
   if (!dept) return []
+
   const managerRoles = [
     USER_ROLES.SECTION_HEAD,
     USER_ROLES.DIVISION_HEAD,
     USER_ROLES.DEPARTMENT_HEAD,
-    USER_ROLES.GENERAL_MANAGER,
   ]
+  if (includeGM) managerRoles.push(USER_ROLES.GENERAL_MANAGER)
 
-  const OGM = 'OFFICE OF GENERAL MANAGER'
+  try {
+    // Query all users with manager roles first (usually a smaller set than all users)
+    const q = query(collection(db, COLLECTIONS.USERS), where('role', 'in', managerRoles))
 
-  // Fetch from the target department OR OGM
-  const q = query(
-    collection(db, COLLECTIONS.USERS),
-    where('department', 'in', [dept, OGM]),
-    where('role', 'in', managerRoles),
-  )
+    const snap = await getDocs(q)
+    const targetDept = dept.trim().toUpperCase()
 
-  const snap = await getDocs(q)
+    const managers = snap.docs
+      .map((d) => ({
+        uid: d.id,
+        ...d.data(),
+      }))
+      .filter((u) => {
+        if (!u.department) return false
+        const userDept = u.department.trim().toUpperCase()
+        const isDeptMatch = userDept === targetDept
+        const isActive = u.isActive !== false
+        return isDeptMatch && isActive
+      })
 
-  return snap.docs
-    .map((d) => ({
-      uid: d.id,
-      ...d.data(),
-    }))
-    .filter((u) => u.isActive !== false)
+    console.log(`[AdminService] Found ${managers.length} managers for department: ${targetDept}`)
+    return managers
+  } catch (error) {
+    console.error('[AdminService] Error in getDepartmentManagers:', error)
+    throw error
+  }
 }

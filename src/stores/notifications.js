@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { db } from '@/firebase'
 import { collection, query, where, onSnapshot } from 'firebase/firestore'
 import { useAuthStore } from './auth'
-import { COLLECTIONS, REQUISITION_STATUS } from '@/firebase/collections'
+import { COLLECTIONS, REQUISITION_STATUS, USER_ROLES } from '@/firebase/collections'
 
 export const useNotificationStore = defineStore('notifications', () => {
   const authStore = useAuthStore()
@@ -23,11 +23,24 @@ export const useNotificationStore = defineStore('notifications', () => {
 
     // Define which status each role is responsible for
     let targetStatus = null
-    if (role === 'section_head') targetStatus = REQUISITION_STATUS.PENDING_RECOMMENDATION
-    if (role === 'warehouse_head') targetStatus = REQUISITION_STATUS.PENDING_INVENTORY
-    if (role === 'budget_officer') targetStatus = REQUISITION_STATUS.PENDING_BUDGET
-    if (role === 'internal_auditor') targetStatus = REQUISITION_STATUS.PENDING_AUDIT
-    if (role === 'general_manager') targetStatus = REQUISITION_STATUS.PENDING_APPROVAL
+    const managerRoles = [
+      USER_ROLES.SECTION_HEAD,
+      USER_ROLES.DIVISION_HEAD,
+      USER_ROLES.DEPARTMENT_HEAD,
+    ]
+    const isManager = managerRoles.includes(role)
+
+    if (isManager) {
+      targetStatus = REQUISITION_STATUS.PENDING_RECOMMENDATION
+    } else if (role === USER_ROLES.WAREHOUSE_HEAD) {
+      targetStatus = REQUISITION_STATUS.PENDING_INVENTORY
+    } else if (role === USER_ROLES.BUDGET_OFFICER) {
+      targetStatus = REQUISITION_STATUS.PENDING_BUDGET
+    } else if (role === USER_ROLES.INTERNAL_AUDITOR) {
+      targetStatus = REQUISITION_STATUS.PENDING_AUDIT
+    } else if (role === USER_ROLES.GENERAL_MANAGER) {
+      targetStatus = REQUISITION_STATUS.PENDING_APPROVAL
+    }
 
     if (!targetStatus) {
       notifications.value = []
@@ -40,10 +53,23 @@ export const useNotificationStore = defineStore('notifications', () => {
     unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        notifications.value = snapshot.docs.map((doc) => ({
+        let docs = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         }))
+
+        // Tighten the logic for managers: must match department AND assigned person
+        if (isManager) {
+          const userDept = authStore.department?.trim().toUpperCase()
+          const userId = authStore.user?.uid
+          docs = docs.filter((r) => {
+            const deptMatch = r.department?.trim().toUpperCase() === userDept
+            const personMatch = r.assignedApproverId === userId
+            return deptMatch && personMatch
+          })
+        }
+
+        notifications.value = docs
         loading.value = false
       },
       (error) => {

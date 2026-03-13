@@ -46,7 +46,9 @@ service cloud.firestore {
       allow create: if isSignedIn();
 
       allow update: if isSignedIn() && (
-        isSuperAdmin() ||
+        // Administrative Maintenance (GM, Auditor, Super Admin)
+        (getUserRole() in ['general_manager', 'internal_auditor', 'super_admin']) ||
+        
         // Requesters can only update their own DRAFTS
         (getUserRole() == 'requester' && isOwner(resource.data) && resource.data.status == 'draft') ||
         

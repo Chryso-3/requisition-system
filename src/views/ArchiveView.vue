@@ -17,7 +17,8 @@ const authStore = useAuthStore()
 const isAdmin = computed(
   () =>
     authStore?.role === USER_ROLES.GENERAL_MANAGER ||
-    authStore?.role === USER_ROLES.INTERNAL_AUDITOR,
+    authStore?.role === USER_ROLES.INTERNAL_AUDITOR ||
+    authStore?.role === USER_ROLES.SUPER_ADMIN,
 )
 
 const router = useRouter()

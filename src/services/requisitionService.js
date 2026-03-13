@@ -3168,9 +3168,11 @@ export async function voidRequisition(id, user, reason) {
  * @returns {Promise<number>} Number of migrated docs
  */
 export async function migrateLegacyArchivedRecords() {
+  console.log('[Migration] Starting Archive Repair...')
   const base = collection(db, COLLECTIONS.REQUISITIONS)
 
   // 1. Find records that SHOULD be archived but aren't
+  console.log('[Migration] Fetching records to archive...')
   const toArchiveSnaps = await Promise.all([
     getDocs(query(base, where('status', '==', REQUISITION_STATUS.REJECTED))),
     getDocs(
@@ -3180,17 +3182,25 @@ export async function migrateLegacyArchivedRecords() {
         where('purchaseStatus', '==', PURCHASE_STATUS.RECEIVED),
       ),
     ),
-  ])
+  ]).catch(err => {
+    console.error('[Migration] Error fetching toArchiveSnaps:', err)
+    throw err
+  })
 
   // 2. Find records that SHOULD NOT be archived but are (the current bug fix)
+  console.log('[Migration] Fetching prematurely archived records...')
   const prematurelyArchivedSnap = await getDocs(
     query(
       base,
       where('status', '==', REQUISITION_STATUS.APPROVED),
       where('isArchived', '==', true),
     ),
-  )
+  ).catch(err => {
+    console.error('[Migration] Error fetching prematurelyArchivedSnap:', err)
+    throw err
+  })
 
+  console.log('[Migration] Starting batch updates...')
   const batch = writeBatch(db)
   let count = 0
 

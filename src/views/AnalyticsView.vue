@@ -791,7 +791,18 @@ function renderCharts() {
           legend: {
             display: true,
             position: 'bottom',
-            labels: { boxWidth: 10, font: { size: 10, family: defaultFont } },
+            labels: {
+              boxWidth: 10,
+              font: { size: 10, family: defaultFont },
+              generateLabels: (chart) => {
+                const labels = Chart.defaults.plugins.legend.labels.generateLabels(chart)
+                return labels.map((label) => {
+                  if (label.text.includes('Historical')) label.fillStyle = '#10b981'
+                  if (label.text.includes('Current')) label.fillStyle = '#991b1b'
+                  return label
+                })
+              },
+            },
           },
           tooltip: {
             backgroundColor: cardBgColor,

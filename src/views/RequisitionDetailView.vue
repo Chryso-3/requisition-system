@@ -125,7 +125,7 @@ const approverRole = computed(() => authStore?.role)
 
 const showApproveDecline = computed(() => {
   const r = requisition.value
-  if (!r || fromAuditLog.value) return false
+  if (!r) return false
   return canUserApprove(approverRole.value, r.status)
 })
 
@@ -137,16 +137,34 @@ const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
 
 const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
 
-const showProcurementDashboard = computed(() => {
-  const r = requisition.value
-  if (!r || r.status !== REQUISITION_STATUS.APPROVED) return false
-
-  const isPOApprover =
+const isPOApprover = computed(() => {
+  return (
     authStore?.role === USER_ROLES.BUDGET_OFFICER ||
     authStore?.role === USER_ROLES.INTERNAL_AUDITOR ||
     authStore?.role === USER_ROLES.GENERAL_MANAGER
+  )
+})
 
-  return isProcurementStaff.value || (isPOApprover && !!r.poStatus)
+const showProcurementDashboard = computed(() => {
+  const r = requisition.value
+  if (!r || r.status === REQUISITION_STATUS.DRAFT) return false
+  return true
+})
+
+const canViewCanvass = computed(() => {
+  const r = requisition.value
+  if (!r) return false
+  return isProcurementStaff.value || isPOApprover.value
+})
+
+const canViewPO = computed(() => {
+  const r = requisition.value
+  if (!r) return false
+  // Procurement and Approvers can always see it if it exists
+  if (isProcurementStaff.value || isPOApprover.value) return !!r.poStatus
+  // Requestors can only see it when fully approved
+  if (isRequestor.value) return r.poStatus === PO_STATUS.APPROVED
+  return false
 })
 
 const purchaseStatusDisplay = computed(
@@ -613,11 +631,8 @@ function doPrint() {
 }
 
 function setPrintMode(mode) {
-  const isProcurement =
-    authStore?.role === USER_ROLES.PURCHASER || authStore?.role === USER_ROLES.BAC_SECRETARY
-  const isPOPhase = !!requisition.value?.poStatus
-
-  if (mode === 'pbac-form-01' && !isProcurement && !isPOPhase) return
+  if (mode === 'pbac-form-01' && !canViewCanvass.value) return
+  if (mode === 'purchase-order' && !canViewPO.value) return
   printMode.value = mode
 }
 
@@ -644,9 +659,15 @@ function initSubscriptions() {
     }
 
     // Contextual Defaults:
-    // If we're coming from PO Approvals, default to Overview and PO Print Mode
-    if (from.value === 'po-approvals' || (!!r.poStatus && showProcurementDashboard.value)) {
+    // If we're coming from PO Approvals, default to Overview and PO Print Mode (if permitted)
+    if (
+      (from.value === 'po-approvals' || (!!r.poStatus && showProcurementDashboard.value)) &&
+      canViewPO.value
+    ) {
       printMode.value = 'purchase-order'
+    } else {
+      // Ensure we don't land on a restricted form by default
+      printMode.value = 'fm-pur-05'
     }
   })
 
@@ -678,7 +699,7 @@ onUnmounted(() => {
     </div>
 
     <div v-if="fromAuditLog" class="audit-banner no-print">
-      You are viewing this requisition from the audit log. This view is read-only.
+      Navigated from Audit Log. Standard role-based actions are enabled.
     </div>
 
     <div v-if="error" class="error-message">{{ error }}</div>
@@ -771,7 +792,7 @@ onUnmounted(() => {
               <div class="workflow-actions">
                 <button
                   v-if="
-                    canvassStatusDisplay === CANVASS_STATUS.PENDING && isPurchaser && !fromAuditLog
+                    canvassStatusDisplay === CANVASS_STATUS.PENDING && isPurchaser
                   "
                   type="button"
                   class="btn-dashboard-action primary"
@@ -784,8 +805,7 @@ onUnmounted(() => {
                   v-else-if="
                     canvassStatusDisplay === CANVASS_STATUS.ORDER_CREATED &&
                     purchaseStatusDisplay === PURCHASE_STATUS.PENDING &&
-                    isPurchaser &&
-                    !fromAuditLog
+                    isPurchaser
                   "
                   type="button"
                   class="btn-dashboard-action primary"
@@ -797,8 +817,7 @@ onUnmounted(() => {
                 <button
                   v-else-if="
                     purchaseStatusDisplay === PURCHASE_STATUS.ORDERED &&
-                    isPurchaser &&
-                    !fromAuditLog
+                    isPurchaser
                   "
                   type="button"
                   class="btn-dashboard-action primary"
@@ -823,11 +842,7 @@ onUnmounted(() => {
                 Requisition Form
               </button>
               <button
-                v-if="
-                  authStore?.role === USER_ROLES.PURCHASER ||
-                  authStore?.role === USER_ROLES.BAC_SECRETARY ||
-                  !!requisition?.poStatus
-                "
+                v-if="canViewCanvass"
                 type="button"
                 :class="['doc-btn', { active: printMode === 'pbac-form-01' }]"
                 @click="setPrintMode('pbac-form-01')"
@@ -835,11 +850,7 @@ onUnmounted(() => {
                 PBAC Canvass Form
               </button>
               <button
-                v-if="
-                  authStore?.role === USER_ROLES.BAC_SECRETARY ||
-                  !!requisition?.poStatus ||
-                  requisition?.purchaseStatus === PURCHASE_STATUS.ORDERED
-                "
+                v-if="canViewPO"
                 type="button"
                 :class="['doc-btn', { active: printMode === 'purchase-order' }]"
                 @click="setPrintMode('purchase-order')"
@@ -854,12 +865,18 @@ onUnmounted(() => {
           <!-- Documents Tab Content -->
           <template v-if="showProcurementDashboard && activeTab === 'documents'">
             <!-- Document 1: Purchase Order view -->
-            <div v-if="printMode === 'purchase-order'" class="print-form-container">
+            <div
+              v-if="printMode === 'purchase-order' && canViewPO"
+              class="print-form-container"
+            >
               <PurchaseOrder :requisition="requisition" :signatures="sigMap" />
             </div>
 
             <!-- Document 2: PBAC Canvass view -->
-            <div v-else-if="printMode === 'pbac-form-01'" class="pbac-document form-container">
+            <div
+              v-else-if="printMode === 'pbac-form-01' && canViewCanvass"
+              class="pbac-document form-container"
+            >
               <PBACForm01 :requisition="requisition" :signatures="sigMap" />
             </div>
 
@@ -1358,7 +1375,7 @@ onUnmounted(() => {
           <!-- Actions: sticky bar so button is always visible and clickable -->
           <div
             class="detail-actions no-print"
-            v-if="!fromAuditLog && (canEditDraft || showApproveDecline || showProcurementDashboard)"
+            v-if="canEditDraft || showApproveDecline || showProcurementDashboard"
           >
             <template v-if="canEditDraft">
               <button
@@ -1422,7 +1439,7 @@ onUnmounted(() => {
             </template>
             <template
               v-else-if="
-                isProcurementStaff && showProcurementDashboard && activeTab === 'documents'
+                showProcurementDashboard && activeTab === 'documents'
               "
             >
               <button type="button" class="btn btn-primary btn-print" @click="doPrint">

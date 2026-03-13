@@ -860,10 +860,12 @@ onMounted(load)
                 </div>
               </div>
               <div class="legend-section">
-                <strong>Detailed History</strong>
+                <strong>Navigation & Detail</strong>
                 <p>
-                  Click on any row (▼) to expand and see the exact timestamps and comments for every
-                  single action on that Requisition.
+                  <strong>Click:</strong> Expand row (▼) to see detailed timestamps and comments.
+                </p>
+                <p>
+                  <strong>Double-Click:</strong> Navigate directly to the Requisition record.
                 </p>
               </div>
             </div>
@@ -899,7 +901,9 @@ onMounted(load)
                     <tr
                       class="journey-row"
                       :class="{ 'is-expanded': isExpanded(journey.requisitionId) }"
+                      title="Double-click to view record"
                       @click="toggleExpand(journey.requisitionId)"
+                      @dblclick="goToDetail(journey.requisitionId)"
                     >
                       <td class="rf-cell" @click.stop="goToDetail(journey.requisitionId)">
                         <span class="rf-number">{{ journey.rfControlNo }}</span>
@@ -1346,6 +1350,7 @@ onMounted(load)
 .journey-row {
   cursor: pointer;
   transition: all 0.15s ease;
+  user-select: none;
 }
 
 .journey-row td {

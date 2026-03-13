@@ -262,9 +262,7 @@ const getPoStatusLabel = (poStatus) => {
   <div class="procurement-hub jinja">
     <div class="page-header">
       <h1 class="page-title">Procurement Hub</h1>
-      <p class="page-subtitle">
-        Unified workspace for canvassing, tracking PO approvals, and receiving deliveries.
-      </p>
+      
     </div>
 
     <div v-if="!isPurchaser" class="access-denied">

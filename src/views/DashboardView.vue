@@ -166,7 +166,17 @@ onMounted(load)
       </p>
     </div>
 
-    <div v-if="error" class="error-banner" v-html="formattedError"></div>
+    <div v-if="error" class="error-banner">
+      <p>{{ error }}</p>
+      <a
+        v-if="error.includes('https://console.firebase.google.com')"
+        :href="error.match(/(https:\/\/console\.firebase\.google\.com[^\s]+)/)[0]"
+        target="_blank"
+        class="error-link"
+      >
+        Create Index here →
+      </a>
+    </div>
 
     <!-- Requestor: summary only, no table -->
     <template v-if="isRequestor">

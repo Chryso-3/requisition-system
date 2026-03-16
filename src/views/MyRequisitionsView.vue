@@ -9,6 +9,7 @@ import {
   REQUISITION_LIST_LIMIT,
   getUserRequisitionStats,
   subscribeAnalyticsSummary,
+  getRequisitionCount,
 } from '@/services/requisitionService'
 import { REQUISITION_STATUS, USER_ROLES } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
@@ -43,6 +44,7 @@ const userStats = ref({
 })
 
 const globalStats = ref(null)
+const liveTotalCount = ref(0)
 
 const statusLabel = {
   [REQUISITION_STATUS.DRAFT]: 'Draft',
@@ -133,7 +135,7 @@ const stats = computed(() => {
       .reduce((sum, [, count]) => sum + count, 0)
 
     return {
-      total: s.total || 0,
+      total: liveTotalCount.value || s.total || 0,
       draft: s.byStatus?.[REQUISITION_STATUS.DRAFT] || 0,
       pending: pendingTotal,
       approved: s.byStatus?.[REQUISITION_STATUS.APPROVED] || 0,
@@ -150,13 +152,16 @@ const stats = computed(() => {
 })
 
 async function refreshUserStats() {
-  if (isGlobalRole.value || !authStore?.user) return
+  if (!authStore?.user) return
   try {
-    // Everyone except GM/Admin sees their OWN stats
-    import('@/services/requisitionService').then(async (m) => {
-      const data = await m.getUserRequisitionStats(authStore.user.uid)
+    if (isGlobalRole.value) {
+      // Fetch live total count for global roles to ensure it matches the live table
+      liveTotalCount.value = await getRequisitionCount({})
+    } else {
+      // Everyone except GM/Admin sees their OWN stats
+      const data = await getUserRequisitionStats(authStore.user.uid)
       if (data) userStats.value = data
-    })
+    }
   } catch (e) {
     console.warn('Failed to fetch user stats:', e)
   }

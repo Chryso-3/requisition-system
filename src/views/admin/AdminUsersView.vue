@@ -6,8 +6,8 @@ import {
   setUserActive,
   updateUserDepartment,
 } from '@/services/adminService'
+import { getDepartments } from '@/services/requisitionService'
 import { USER_ROLES, USER_ROLE_LABELS } from '@/firebase/collections'
-import { DEPARTMENTS } from '@/constants/departments'
 import {
   Search,
   UserCog,
@@ -25,6 +25,7 @@ const loading = ref(true)
 const searchQuery = ref('')
 const selectedRole = ref('all')
 const savingId = ref(null)
+const departmentsList = ref([])
 
 const departmentalRoles = [
   USER_ROLES.SECTION_HEAD,
@@ -58,7 +59,9 @@ const filteredUsers = computed(() => {
 async function fetchUsers() {
   loading.value = true
   try {
-    users.value = await getAllUsers()
+    const [usersData, deptsData] = await Promise.all([getAllUsers(), getDepartments()])
+    users.value = usersData
+    departmentsList.value = deptsData
   } catch (err) {
     console.error('Error fetching users:', err)
   } finally {
@@ -206,7 +209,7 @@ onMounted(fetchUsers)
                     class="elite-select dept-select"
                   >
                     <option value="" disabled>Not Assigned</option>
-                    <option v-for="dept in DEPARTMENTS" :key="dept" :value="dept">
+                    <option v-for="dept in departmentsList" :key="dept" :value="dept">
                       {{ dept }}
                     </option>
                   </select>

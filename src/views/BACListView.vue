@@ -286,7 +286,7 @@ onUnmounted(() => {
                         <span>{{ r.canvassNumber || '—' }}</span>
                       </div>
                     </td>
-                    <td>{{ formatDate(r.submittedToBACAt) }}</td>
+                    <td>{{ formatDate(r.submittedToBACAt || r.canvassDate) }}</td>
                     <td>{{ getDeptAbbreviation(r.department) }}</td>
                     <td class="purpose-cell">
                       {{ (r.purpose || '').slice(0, 40)
@@ -370,10 +370,10 @@ onUnmounted(() => {
             <div class="po-field">
               <label class="po-label">Supplier / Company Name</label>
               <input
-                v-model="supplier"
+                :value="supplier"
                 type="text"
-                placeholder="Enter winning supplier"
-                class="po-input"
+                class="po-input po-input-readonly"
+                readonly
               />
             </div>
 

@@ -1,10 +1,9 @@
 <script setup>
-import { ref, reactive, watch, computed } from 'vue'
-import { createRequisitionDocument, updateRequisition } from '@/services/requisitionService'
+import { ref, reactive, watch, computed, onMounted } from 'vue'
+import { createRequisitionDocument, updateRequisition, getDepartments } from '@/services/requisitionService'
 import { getDepartmentManagers } from '@/services/adminService'
 import { REQUISITION_STATUS, USER_ROLE_LABELS } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
-import { DEPARTMENTS } from '@/constants/departments'
 
 const props = defineProps({
   requisition: {
@@ -61,7 +60,11 @@ watch(
 
 const units = ['pcs', 'dz.', 'set', 'box', 'unit', 'pair', 'roll', 'meter', 'liter', 'kg']
 
-const departments = DEPARTMENTS
+const departments = ref([])
+
+onMounted(async () => {
+  departments.value = await getDepartments()
+})
 
 function addItem() {
   form.items.push({ quantity: 1, unit: 'pcs', description: '', remarks: '' })

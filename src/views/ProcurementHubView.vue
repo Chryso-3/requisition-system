@@ -9,6 +9,7 @@ import {
   markRequisitionReceived,
   generateCanvassNo,
 } from '@/services/requisitionService'
+import { getSuppliers, addSupplier } from '@/services/adminService'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
 import {
   REQUISITION_STATUS,
@@ -45,6 +46,23 @@ const canvassDate = ref('')
 const supplier = ref('')
 const canvassItems = ref([])
 const receivedAt = ref('')
+const allSuppliers = ref([])
+const saveToRegistry = ref(false)
+const showSupplierSuggestions = ref(false)
+
+const supplierSuggestions = computed(() => {
+  if (!supplier.value.trim()) return []
+  const k = supplier.value.toLowerCase()
+  return allSuppliers.value
+    .filter((s) => s.isActive && s.name.toLowerCase().includes(k))
+    .map((s) => s.name)
+})
+
+const isNewSupplier = computed(() => {
+  const name = supplier.value.trim().toLowerCase()
+  if (!name) return false
+  return !allSuppliers.value.some((s) => s.name.toLowerCase() === name)
+})
 
 let unsubscribes = []
 
@@ -95,13 +113,29 @@ async function openMarkCanvassed(r) {
   }
   canvassDate.value = new Date().toISOString().slice(0, 10)
   supplier.value = r.supplier || ''
+  saveToRegistry.value = false
   canvassItems.value = (r.items || []).map((item) => ({ ...item }))
   actionError.value = ''
+
+  // Fetch suppliers if not already loaded
+  if (allSuppliers.value.length === 0) {
+    try {
+      allSuppliers.value = await getSuppliers()
+    } catch (e) {
+      console.error('Failed to pre-fetch suppliers:', e)
+    }
+  }
 }
 
 function closeCanvassModal() {
   modalCanvass.value = null
-  actionError.value = ''
+  actionError.value = null
+}
+
+function handleSupplierBlur() {
+  setTimeout(() => {
+    showSupplierSuggestions.value = false
+  }, 200)
 }
 
 async function saveMarkCanvassed() {
@@ -118,11 +152,25 @@ async function saveMarkCanvassed() {
   actionError.value = ''
   try {
     const user = authStore.user
+    const supplierName = supplier.value.trim()
+
+    // Handle saving new supplier to registry if requested
+    if (saveToRegistry.value && isNewSupplier.value) {
+      try {
+        await addSupplier({ name: supplierName })
+        // Update local list for next time
+        allSuppliers.value = await getSuppliers()
+      } catch (err) {
+        console.error('Failed to auto-register supplier:', err)
+        // Benefit of doubt: proceed with canvass even if registry save fails
+      }
+    }
+
     await markRequisitionCanvassed(modalCanvass.value.id, {
       canvassNumber: canvassNumber.value.trim() || undefined,
       canvassDate: new Date(canvassDate.value + 'T12:00:00'),
       canvassBy: user ? { userId: user.uid, name: authStore.displayName, email: user.email } : null,
-      supplier: supplier.value.trim(),
+      supplier: supplierName,
       items: canvassItems.value,
       signatureData: authStore.userProfile?.signatureData,
     })
@@ -208,17 +256,18 @@ function startSubscriptions() {
     (err) => console.error('Approvals error:', err),
   )
 
-  // 3. Receiving: PO is approved, waiting for items
+  // 3. Fulfillment: PO is approved, waiting to be ORDERED or RECEIVED
   const unsub3 = subscribeRequisitions(
-    { status: REQUISITION_STATUS.APPROVED, purchaseStatus: PURCHASE_STATUS.ORDERED },
+    { status: REQUISITION_STATUS.APPROVED, poStatus: PO_STATUS.APPROVED },
     (results) => {
-      receivingList.value = results
+      // Filter out those already finished (RECEIVED)
+      receivingList.value = results.filter((r) => r.purchaseStatus !== PURCHASE_STATUS.RECEIVED)
       loadedCategories.value.add('receiving')
       if (loadedCategories.value.size >= categoriesToLoad.length) {
         loading.value = false
       }
     },
-    (err) => console.error('Receiving error:', err),
+    (err) => console.error('Fulfillment error:', err),
   )
 
   unsubscribes = [unsub1, unsub2, unsub3]
@@ -298,7 +347,7 @@ const getPoStatusLabel = (poStatus) => {
             :class="{ active: activeTab === 'receiving' }"
             @click="activeTab = 'receiving'"
           >
-            <span class="tab-label">For Receiving</span>
+            <span class="tab-label">PO Fulfillment</span>
             <span class="tab-count success" v-if="receivingList.length > 0">{{
               receivingList.length
             }}</span>
@@ -339,7 +388,7 @@ const getPoStatusLabel = (poStatus) => {
                   ? 'Requests pending canvass'
                   : activeTab === 'approvals'
                     ? 'Purchase Orders in approval'
-                    : 'Items ordered & waiting for delivery'
+                    : 'Approved POs waiting to be Ordered or Received'
               }}</strong>
             </div>
           </div>
@@ -391,6 +440,11 @@ const getPoStatusLabel = (poStatus) => {
                     <td v-if="activeTab !== 'canvassing'">{{ r.supplier || '—' }}</td>
                     <td v-if="activeTab === 'approvals'">
                       <span class="status-chip">{{ getPoStatusLabel(r.poStatus) }}</span>
+                    </td>
+                    <td v-if="activeTab === 'receiving'">
+                      <span class="status-chip" :class="r.purchaseStatus === 'ordered' ? 'received-chip' : 'pending-chip'">
+                        {{ r.purchaseStatus === 'ordered' ? '🚚 Ordered' : '✉️ Ready to Order' }}
+                      </span>
                     </td>
                     <td class="action-cell" @click.stop>
                       <button
@@ -470,9 +524,39 @@ const getPoStatusLabel = (poStatus) => {
           <div class="hub-modal-body">
             <div v-if="actionError" class="hub-alert-error">{{ actionError }}</div>
             <div class="form-grid">
-              <div class="form-field full">
+              <div class="form-field full supplier-select-field">
                 <label>Winning Supplier Name</label>
-                <input v-model="supplier" type="text" placeholder="e.g. Acme Corp" />
+                <div class="autocomplete-wrap">
+                  <input
+                    v-model="supplier"
+                    type="text"
+                    placeholder="Search or type new supplier..."
+                    @focus="showSupplierSuggestions = true"
+                    @blur="handleSupplierBlur"
+                  />
+                  <div v-if="showSupplierSuggestions && supplierSuggestions.length > 0" class="suggestions-list">
+                    <div
+                      v-for="sname in supplierSuggestions"
+                      :key="sname"
+                      class="suggestion-item"
+                      @click="supplier = sname"
+                    >
+                      {{ sname }}
+                    </div>
+                  </div>
+                </div>
+                <div v-if="isNewSupplier && supplier.trim()" class="new-supplier-notice">
+                  <div class="smart-info">
+                    <span class="smart-tag">NEW SUPPLIER DETECTED</span>
+                  </div>
+                  <label class="premium-checkbox-card" :class="{ 'is-checked': saveToRegistry }">
+                    <input v-model="saveToRegistry" type="checkbox" />
+                    <div class="checkbox-visual">
+                      <div class="check-mark" v-if="saveToRegistry">✓</div>
+                    </div>
+                    <span class="checkbox-text">Save to Supplier Registry?</span>
+                  </label>
+                </div>
               </div>
               <div class="form-field">
                 <label>Canvass No. <span class="badge-auto">Auto</span></label>
@@ -1048,5 +1132,141 @@ const getPoStatusLabel = (poStatus) => {
 .btn-submit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Supplier Autocomplete Styles */
+.supplier-select-field {
+  position: relative;
+}
+
+.autocomplete-wrap {
+  position: relative;
+}
+
+.suggestions-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  z-index: 50;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.suggestion-item {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  border-bottom: 1px solid #f8fafc;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-item:hover {
+  background: #f1f5f9;
+  color: #2563eb;
+}
+
+.new-supplier-notice {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.25rem; /* Small padding to align with input text */
+  animation: slideDown 0.3s ease-out;
+}
+
+.smart-tag {
+  font-size: 0.65rem;
+  font-weight: 800;
+  color: #0369a1;
+  letter-spacing: 0.05em;
+  background: #e0f2fe;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.premium-checkbox-card {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 0.625rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.premium-checkbox-card input {
+  display: none;
+}
+
+.checkbox-visual {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #cbd5e1;
+  border-radius: 5px;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.2s;
+  background: white;
+  flex-shrink: 0;
+}
+
+.is-checked .checkbox-visual {
+  border-color: #3b82f6;
+  background: #3b82f6;
+}
+
+.check-mark {
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 900;
+  line-height: 1;
+  display: block;
+}
+
+.checkbox-text {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #64748b;
+  transition: color 0.2s;
+  line-height: 1;
+  margin: 0;
+  display: inline-block;
+}
+
+.is-checked .checkbox-text {
+  color: #1e40af;
+  font-weight: 700;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.status-chip.received-chip {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #10b98133;
+}
+
+.status-chip.pending-chip {
+  background: #fff7ed;
+  color: #ea580c;
+  border: 1px solid #f9731633;
 }
 </style>

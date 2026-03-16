@@ -390,17 +390,16 @@ function formatDate(date) {
           <FileText :size="48" />
           <p>No requisitions found matching your criteria.</p>
         </div>
-
-        <PaginationComponent
-          v-if="!loading && totalItems > 0"
-          :current-page="currentPage"
-          :total-pages="totalPages"
-          :page-size="pageSize"
-          :total-items="totalItems"
-          :loading="loading"
-          @page-change="handlePageChange"
-        />
       </div>
+      <PaginationComponent
+        v-if="!loading && totalItems > 0"
+        :current-page="currentPage"
+        :total-pages="totalPages"
+        :pageSize="pageSize"
+        :total-items="totalItems"
+        :loading="loading"
+        @page-change="handlePageChange"
+      />
     </div>
 
     <!-- Override Modal -->
@@ -565,9 +564,12 @@ function formatDate(date) {
 
 <style scoped>
 .admin-page {
-  padding: 0.5rem 2rem 2rem; /* Balanced horizontal padding */
-  max-width: 1700px; /* Optimized breadth for symmetry */
+  padding: 0.5rem 2rem 1rem;
+  max-width: 1700px;
   margin: 0 auto;
+  height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
 }
 
 .page-header {
@@ -671,13 +673,15 @@ function formatDate(date) {
     0 8px 32px rgba(0, 0, 0, 0.04),
     inset 0 0 0 1px rgba(255, 255, 255, 0.2);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .table-wrapper {
   width: 100%;
-  max-height: 72vh;
+  flex: 1;
   overflow: auto;
-  min-height: 400px; /* Stabilizes container during filtering */
+  min-height: 0;
   position: relative;
 }
 

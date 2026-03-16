@@ -34,20 +34,42 @@ import {
   PO_STATUS,
   USER_ROLES,
 } from '../firebase/collections'
-import { DEPARTMENTS } from '@/constants/departments'
 
-function normalizeDepartment(val) {
+let cachedDepartments = []
+
+/** Fetches departments from Firestore and caches them. */
+export async function getDepartments() {
+  if (cachedDepartments.length > 0) return cachedDepartments
+  try {
+    const q = query(collection(db, COLLECTIONS.DEPARTMENTS), orderBy('name', 'asc'))
+    const snap = await getDocs(q)
+    cachedDepartments = snap.docs.map((d) => d.data().name)
+    return cachedDepartments
+  } catch (error) {
+    console.error('[requisitionService] Error fetching departments:', error)
+    return []
+  }
+}
+
+/** Synchronous version of department normalization. Requires pre-fetched departments array. */
+export function normalizeDepartmentSync(val, departments = []) {
   if (!val) return '—'
   const t = String(val).trim()
   if (!t) return '—'
+
   // Match canonical department names case-insensitively
-  const match = DEPARTMENTS.find((d) => d.toLowerCase() === t.toLowerCase())
+  const match = departments.find((d) => d.toLowerCase() === t.toLowerCase())
   if (match) return match
-  // Collapse whitespace and try uppercase match
+
   const collapsed = t.replace(/\s+/g, ' ').toUpperCase()
-  const match2 = DEPARTMENTS.find((d) => d.toUpperCase() === collapsed)
+  const match2 = departments.find((d) => d.toUpperCase() === collapsed)
   if (match2) return match2
   return t
+}
+
+async function normalizeDepartment(val) {
+  const departments = await getDepartments()
+  return normalizeDepartmentSync(val, departments)
 }
 
 /**
@@ -165,18 +187,15 @@ export async function getEmailsByRoles(roles) {
  */
 export async function getEmailsByRole(role) {
   try {
-    const q = query(collection(db, COLLECTIONS.USERS), where('role', '==', role))
+    const q = query(
+      collection(db, COLLECTIONS.USERS),
+      where('role', '==', role),
+      where('isActive', '==', true),
+    )
     const snap = await getDocs(q)
-
-    // In Firestore, if a field is undefined, simple where() queries exclude the document.
-    // The UI treats users as active unless isActive is explicitly false.
-    return snap.docs
-      .map((d) => d.data())
-      .filter((data) => data.isActive !== false) // Filter JS-side so undefined is treated as active
-      .map((data) => data.email)
-      .filter((e) => !!e)
+    return snap.docs.map((d) => d.data().email).filter(Boolean)
   } catch (error) {
-    console.error(`[getEmailsByRole] Error fetching for role ${role}:`, error)
+    console.error('[requisitionService] Error fetching emails by role:', error)
     return []
   }
 }
@@ -220,6 +239,7 @@ export async function seedAnalyticsSummary() {
   const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
   console.log(`[Seeding] Found ${docs.length} requisitions to process.`)
 
+  const departments = await getDepartments()
   const now = new Date()
   const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 
@@ -257,7 +277,7 @@ export async function seedAnalyticsSummary() {
     summary.byStatus[s] = (summary.byStatus[s] || 0) + 1
 
     // Department counts
-    const dept = normalizeDepartment(r.department)
+    const dept = normalizeDepartmentSync(r.department, departments)
     summary.byDepartment[dept] = (summary.byDepartment[dept] || 0) + 1
 
     // Monthly counts (createdAt)
@@ -1239,6 +1259,8 @@ export async function markRequisitionCanvassed(
     canvassDate: at,
     canvassBy: canvassBy ?? null,
     canvassNumber: canvassNumber ?? '',
+    submittedToBACAt: at,
+    submittedToBACBy: canvassBy ?? null,
   }
 
   if (supplier) updates.supplier = supplier
@@ -1680,18 +1702,19 @@ export async function getAnalyticsData() {
     if (r.status && pipeline[r.status] !== undefined) pipeline[r.status]++
   })
 
+  const departments = await getDepartments()
   const thisMonthReqs = allReqs.filter((r) => {
     const d = toDate(r.createdAt ?? r.date)
     return d && d >= startOfMonth && d <= endOfMonth
   })
   const byDepartmentMap = {}
   thisMonthReqs.forEach((r) => {
-    const dept = normalizeDepartment(r.department)
+    const dept = normalizeDepartmentSync(r.department, departments)
     if (!byDepartmentMap[dept]) byDepartmentMap[dept] = 0
     byDepartmentMap[dept]++
   })
   // Ensure all known departments appear (show zero counts when absent)
-  DEPARTMENTS.forEach((d) => {
+  departments.forEach((d) => {
     if (!byDepartmentMap[d]) byDepartmentMap[d] = 0
   })
   const byDepartment = Object.entries(byDepartmentMap)
@@ -1762,13 +1785,14 @@ function toDate(val) {
 /**
  * Compute analytics + percentages from four requisition lists (for realtime). dateRange = { start, end } or null for all.
  */
-export function computeAnalyticsFromLists(
+export async function computeAnalyticsFromLists(
   allReqs,
   pendingReqs,
   approvedReqs,
   rejectedReqs,
   dateRange,
 ) {
+  const departments = await getDepartments()
   const rangeStart = dateRange?.start ?? null
   const rangeEnd = dateRange?.end ?? null
 
@@ -1820,12 +1844,12 @@ export function computeAnalyticsFromLists(
 
   const byDepartmentMap = {}
   activeInRange.forEach((r) => {
-    const dept = normalizeDepartment(r.department)
+    const dept = normalizeDepartmentSync(r.department, departments)
     if (!byDepartmentMap[dept]) byDepartmentMap[dept] = 0
     byDepartmentMap[dept]++
   })
   // Ensure all known departments appear (show zero counts when absent)
-  DEPARTMENTS.forEach((d) => {
+  departments.forEach((d) => {
     if (!byDepartmentMap[d]) byDepartmentMap[d] = 0
   })
   const byDepartment = Object.entries(byDepartmentMap)
@@ -1895,7 +1919,7 @@ export function computeAnalyticsFromLists(
 
   // Pre-populate department spend map with zeros
   const deptSpendMap = {}
-  DEPARTMENTS.forEach((d) => {
+  departments.forEach((d) => {
     deptSpendMap[d] = 0
   })
 
@@ -1934,7 +1958,7 @@ export function computeAnalyticsFromLists(
     totalApprovedValue += reqTotal
 
     // Dept Spend
-    const dept = normalizeDepartment(r.department)
+    const dept = normalizeDepartmentSync(r.department, departments)
     if (deptSpendMap[dept] !== undefined) {
       deptSpendMap[dept] += reqTotal
     } else {

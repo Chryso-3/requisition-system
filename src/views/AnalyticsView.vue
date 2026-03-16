@@ -10,10 +10,8 @@ import {
   REQUISITION_STATUS,
   REQUISITION_LIST_LIMIT,
 } from '@/services/requisitionService'
-import { DEPARTMENTS } from '@/constants/departments'
 import { USER_ROLES } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
-import { getDeptAbbreviation } from '@/utils/deptUtils'
 import { Briefcase, Clock, CheckCircle, DollarSign, TrendingDown, RefreshCw } from 'lucide-vue-next'
 
 Chart.register(...registerables)
@@ -204,7 +202,7 @@ function updateData() {
 
   const byDepartment = Object.entries(byDeptSrc)
     .map(([department, count]) => ({
-      department: getDeptAbbreviation(department),
+      department,
       count,
       pct: pipelineTotal > 0 ? Math.round((count / pipelineTotal) * 100) : 0,
     }))
@@ -287,7 +285,7 @@ function updateData() {
     productivity: { bottlenecks },
     financials: {
       departmentalSpend: Object.entries(deptSpendSrc)
-        .map(([department, total]) => ({ department: getDeptAbbreviation(department), total }))
+        .map(([department, total]) => ({ department, total }))
         .sort((a, b) => b.total - a.total),
     },
   }
@@ -379,6 +377,24 @@ function formatPeso(val) {
     style: 'currency',
     currency: 'PHP',
   }).format(val)
+}
+
+function safeAbbreviate(name) {
+  if (!name || typeof name !== 'string') return '—'
+  const DEPT_MAP_ABBR = {
+    'OFFICE OF GENERAL MANAGER': 'OGM',
+    'FINANCE SERVICES DEPARTMENT': 'FSD',
+    'INSTITUTIONAL SERVICES DEPARTMENT': 'ISD',
+    'TECHNICAL SERVICES DEPARTMENT': 'TSD',
+  }
+  const upper = name.trim().toUpperCase()
+  return DEPT_MAP_ABBR[upper] || name
+}
+
+function formatLastUpdated(val) {
+  if (!val) return 'Never'
+  const d = val?.toDate ? val.toDate() : new Date(val)
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function renderCharts() {
@@ -487,7 +503,7 @@ function renderCharts() {
       type: 'bar',
       data: {
         labels: dept.map((d) => {
-          const name = d.department.replace(/ Department/i, '').replace(/ Dept\.?/i, '')
+          const name = safeAbbreviate(d.department)
           return `${name} (${d.count})`
         }),
         datasets: [
@@ -849,7 +865,7 @@ function renderCharts() {
     chartFinancials = new Chart(financialEl, {
       type: 'bar',
       data: {
-        labels: fs.map((f) => f.department),
+        labels: fs.map((f) => safeAbbreviate(f.department)),
         datasets: [
           {
             label: 'Total Spend (₱)',
@@ -1131,7 +1147,7 @@ onUnmounted(() => {
               <div class="banner-items">
                 <div v-for="h in data.financials.highValueReqs" :key="h.id" class="hv-item">
                   <span class="hv-rf">{{ h.rfControlNo }}</span>
-                  <span class="hv-dept">{{ h.department }}</span>
+                  <span class="hv-dept">{{ safeAbbreviate(h.department) }}</span>
                   <span class="hv-amount">{{ formatPeso(h.total) }}</span>
                   <router-link :to="'/requisitions/' + h.id" class="hv-link">Review</router-link>
                 </div>

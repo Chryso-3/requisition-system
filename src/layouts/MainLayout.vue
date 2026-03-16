@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { USER_ROLE_LABELS, USER_ROLES } from '@/firebase/collections'
+import { USER_ROLE_LABELS, USER_ROLES, PURCHASE_STATUS } from '@/firebase/collections'
 import { listRequisitionsSimple, APPROVAL_WORKFLOW } from '@/services/requisitionService'
 import { useSystemStore } from '@/stores/system'
 import { useNotificationStore } from '@/stores/notifications'
@@ -24,8 +24,12 @@ const systemStore = useSystemStore()
 const notificationStore = useNotificationStore()
 const showUserMenu = ref(false)
 const showNotificationMenu = ref(false)
-const pendingPOCount = ref(0)
+const pendingPOCount = ref(0) // legacy cleanup?
 const pendingCount = computed(() => notificationStore.unreadCount)
+
+// Template Refs for robust click-outside
+const userMenuRef = ref(null)
+const notifMenuRef = ref(null)
 
 const roleLabel = computed(() =>
   authStore?.role ? USER_ROLE_LABELS[authStore.role] || 'User' : 'Loading...',
@@ -49,6 +53,11 @@ function loadPendingCount() {
   // The store handles both RF and PO listeners in one call
   notificationStore.initNotificationListener()
 }
+
+const poApprovalsLabel = computed(() => {
+  if (authStore?.role === USER_ROLES.PURCHASER) return 'POs to Order'
+  return '2. PO Approvals'
+})
 
 async function onSignOut() {
   await authStore.signOut()
@@ -77,23 +86,37 @@ function closeUserMenu() {
   showUserMenu.value = false
 }
 
-// Click outside to close
+// Click outside to close (Improved with Refs)
 function handleClickOutside(event) {
-  const userMenu = document.querySelector('.user-menu')
-  if (showUserMenu.value && userMenu && !userMenu.contains(event.target)) {
+  if (showUserMenu.value && userMenuRef.value && !userMenuRef.value.contains(event.target)) {
     closeUserMenu()
   }
 
-  const notifMenu = document.querySelector('.notification-wrapper')
-  if (showNotificationMenu.value && notifMenu && !notifMenu.contains(event.target)) {
+  if (showNotificationMenu.value && notifMenuRef.value && !notifMenuRef.value.contains(event.target)) {
     showNotificationMenu.value = false
   }
 }
 
 function handleNotificationClick(notif) {
-  // PO notifications belong on the PO approvals page
-  if (notif._type === 'po') {
+  const role = authStore.role
+  const isPOApprover = ['budget_officer', 'internal_auditor', 'general_manager'].includes(role)
+
+  if (role === USER_ROLES.PURCHASER) {
+    if (notif._type === 'po') {
+      router.push('/po-approvals')
+    } else {
+      // For RF types, decide based on status
+      if (notif.purchaseStatus === PURCHASE_STATUS.ORDERED) {
+        router.push({ path: '/procurement-hub', query: { tab: 'receiving' } })
+      } else {
+        router.push({ path: '/procurement-hub', query: { tab: 'canvassing' } })
+      }
+    }
+  } else if (notif._type === 'po' && isPOApprover) {
     router.push('/po-approvals')
+  } else if (role === USER_ROLES.BAC_SECRETARY) {
+    // BAC Secretary needs to see the detail page but contextually from their dashboard
+    router.push({ path: `/requisitions/${notif.id}`, query: { from: 'bac-dashboard' } })
   } else {
     router.push(`/requisitions/${notif.id}`)
   }
@@ -102,13 +125,25 @@ function handleNotificationClick(notif) {
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
-  setTimeout(loadPendingCount, 400)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   notificationStore.stopListener()
 })
+
+// Reactive listener initialization
+watch(
+  () => authStore.role,
+  (newRole) => {
+    if (newRole) {
+      notificationStore.initNotificationListener()
+    } else {
+      notificationStore.stopListener()
+    }
+  },
+  { immediate: true },
+)
 
 // Real-time maintenance enforcement
 watch(
@@ -265,7 +300,7 @@ watch(
           <router-link
             v-if="
               authStore?.role &&
-              ['budget_officer', 'internal_auditor', 'general_manager'].includes(authStore.role)
+              ['budget_officer', 'internal_auditor', 'general_manager', 'purchaser'].includes(authStore.role)
             "
             to="/po-approvals"
             class="nav-item"
@@ -286,12 +321,6 @@ watch(
                   width="14"
                   height="18"
                   rx="2"
-                  fill="white"
-                  stroke="#E2E8F0"
-                  stroke-width="1.5"
-                />
-                <path
-                  d="M8 7H16M8 11H13"
                   stroke="#CBD5E1"
                   stroke-width="2"
                   stroke-linecap="round"
@@ -683,7 +712,7 @@ watch(
           </router-link>
 
           <!-- Notification Bell -->
-          <div class="notification-wrapper">
+          <div ref="notifMenuRef" class="notification-wrapper">
             <button
               class="notification-btn"
               :class="{ 'has-unread': pendingCount > 0 }"
@@ -700,21 +729,24 @@ watch(
                   <span v-if="pendingCount > 0" class="count-pill">{{ pendingCount }} New</span>
                 </div>
                 <div class="notification-list">
-                  <div v-if="notificationStore.loading" class="notification-empty">Loading...</div>
+                  <div v-if="notificationStore.loading" class="notification-empty">
+                    <div class="spinner-tiny"></div>
+                    <span>Loading...</span>
+                  </div>
                   <template v-else-if="notificationStore.notifications.length > 0">
                     <div
                       v-for="notif in notificationStore.notifications"
-                      :key="notif.id + (notif._type || '')"
+                      :key="notif.id + (notif._displayType || '')"
                       class="notification-item"
                       @click="handleNotificationClick(notif)"
                     >
-                      <div class="notif-icon">{{ notif._type === 'po' ? '🧾' : '📄' }}</div>
+                      <div class="notif-icon">{{ notif._displayType === 'po' ? '🧾' : '📄' }}</div>
                       <div class="notif-content">
                         <div class="notif-title">
                           {{ notif.rfControlNo || notif.controlNumber || 'New Requisition' }}
                         </div>
                         <div class="notif-subtitle">
-                          {{ notif._type === 'po' ? 'PO Pending Approval' : 'From ' + (notif.requestedBy?.name || '—') }}
+                          {{ notif._displayType === 'po' ? 'PO Pending Approval' : 'From ' + (notif.requestedBy?.name || '—') }}
                         </div>
                       </div>
                     </div>
@@ -734,6 +766,7 @@ watch(
             </Transition>
           </div>
           <div
+            ref="userMenuRef"
             class="user-menu"
             role="button"
             tabindex="0"

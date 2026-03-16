@@ -167,7 +167,17 @@ watch(totalRows, (newTotal) => {
       </div>
 
       <div class="panel-body">
-        <div v-if="error" class="error-message" v-html="formattedError"></div>
+        <div v-if="error" class="error-message">
+          <p>{{ error }}</p>
+          <a
+            v-if="error.includes('https://console.firebase.google.com')"
+            :href="error.match(/(https:\/\/console\.firebase\.google\.com[^\s]+)/)[0]"
+            target="_blank"
+            class="error-link"
+          >
+            Create Index here →
+          </a>
+        </div>
 
         <div v-else-if="loading" class="loading-inline">
           <div class="spinner small"></div>

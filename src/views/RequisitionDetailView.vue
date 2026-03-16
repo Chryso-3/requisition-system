@@ -134,7 +134,7 @@ const isProcurementStaff = computed(() => {
 })
 
 const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
-
+const isAdmin = computed(() => authStore?.role === USER_ROLES.SUPER_ADMIN)
 const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
 
 const isPOApprover = computed(() => {
@@ -154,14 +154,14 @@ const showProcurementDashboard = computed(() => {
 const canViewCanvass = computed(() => {
   const r = requisition.value
   if (!r) return false
-  return isProcurementStaff.value || isPOApprover.value
+  return isProcurementStaff.value || isPOApprover.value || isAdmin.value || isRequestor.value
 })
 
 const canViewPO = computed(() => {
   const r = requisition.value
   if (!r) return false
-  // Procurement and Approvers can always see it if it exists
-  if (isProcurementStaff.value || isPOApprover.value) return !!r.poStatus
+  // Procurement, Approvers and Admins can always see it if it exists
+  if (isProcurementStaff.value || isPOApprover.value || isAdmin.value) return !!r.poStatus
   // Requestors can only see it when fully approved
   if (isRequestor.value) return r.poStatus === PO_STATUS.APPROVED
   return false

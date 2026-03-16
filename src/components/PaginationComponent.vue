@@ -12,19 +12,26 @@ const props = defineProps({
 const emit = defineEmits(['page-change'])
 
 const pages = computed(() => {
-  const range = []
-  const delta = 2
-  const left = props.currentPage - delta
-  const right = props.currentPage + delta + 1
-
-  for (let i = 1; i <= props.totalPages; i++) {
-    if (i === 1 || i === props.totalPages || (i >= left && i < right)) {
-      range.push(i)
-    } else if (range[range.length - 1] !== '...') {
-      range.push('...')
-    }
+  const current = props.currentPage
+  const total = props.totalPages
+  
+  // If 5 or fewer pages, just show all of them
+  if (total <= 5) {
+    return Array.from({ length: total }, (_, i) => i + 1)
   }
-  return range
+
+  // If current page is at the very beginning
+  if (current <= 2) {
+    return [1, 2, 3, '...', total]
+  }
+
+  // If current page is at the very end
+  if (current >= total - 1) {
+    return [1, '...', total - 2, total - 1, total]
+  }
+
+  // If current page is somewhere in the middle
+  return [1, '...', current, '...', total]
 })
 
 function changePage(p) {

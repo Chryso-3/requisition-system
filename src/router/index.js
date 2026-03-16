@@ -205,13 +205,10 @@ router.beforeEach(async (to, _from, next) => {
   if (authStore.loading) await authStore.initAuthListener()
   await authStore.waitForAuthReady()
 
-  // Robust super admin check (case-insensitive and checking both sources)
-  // Also check for emergency local storage bypass
   const isSuperAdmin =
     authStore.role === USER_ROLES.SUPER_ADMIN ||
     authStore.userProfile?.role === USER_ROLES.SUPER_ADMIN ||
-    authStore.userProfile?.role?.toLowerCase() === 'super_admin' ||
-    localStorage.getItem('EMERGENCY_ADMIN_BYPASS') === 'true'
+    authStore.userProfile?.role?.toLowerCase() === 'super_admin'
 
   // 1. Maintenance Mode Guard
   const isMaintenance = systemStore.config.maintenanceMode

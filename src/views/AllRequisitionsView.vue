@@ -367,7 +367,17 @@ onUnmounted(() => {
       </div>
 
       <div class="panel-body">
-        <div v-if="error" class="error-banner" v-html="formattedError"></div>
+        <div v-if="error" class="error-banner">
+          <p>{{ error }}</p>
+          <a
+            v-if="error.includes('https://console.firebase.google.com')"
+            :href="error.match(/(https:\/\/console\.firebase\.google\.com[^\s]+)/)[0]"
+            target="_blank"
+            class="error-link"
+          >
+            Create Index here →
+          </a>
+        </div>
 
         <div v-else class="table-section">
           <div class="table-container" ref="tableContainer">

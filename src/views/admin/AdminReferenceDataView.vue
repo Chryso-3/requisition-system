@@ -2,13 +2,12 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import * as XLSX from 'xlsx'
 import {
-  getDepartments,
   addDepartment,
   updateDepartment,
-  getSuppliers,
   addSupplier,
   updateSupplier,
 } from '@/services/adminService'
+import { useReferenceStore } from '@/stores/reference'
 import PaginationComponent from '@/components/PaginationComponent.vue'
 import {
   Building2,
@@ -25,9 +24,10 @@ import {
 } from 'lucide-vue-next'
 
 const activeTab = ref('departments') // 'departments' or 'suppliers'
-const departments = ref([])
-const suppliers = ref([])
-const loading = ref(true)
+const referenceStore = useReferenceStore()
+const departments = computed(() => referenceStore.departments)
+const suppliers = computed(() => referenceStore.suppliers)
+const loading = computed(() => referenceStore.loading)
 const searchKey = ref('')
 const isAdding = ref(false)
 const editingId = ref(null)
@@ -90,49 +90,51 @@ const paginatedSuppliers = computed(() => {
 })
 
 async function fetchData() {
-  loading.value = true
-  try {
-    const [d, s] = await Promise.all([getDepartments(), getSuppliers()])
-    departments.value = d
-    suppliers.value = s
-  } catch (err) {
-    console.error('Failed to fetch reference data:', err)
-  } finally {
-    loading.value = false
-  }
+  await referenceStore.ensureAll()
 }
 
 async function handleAddDept() {
-  if (!deptForm.value.name.trim()) return
-  loading.value = true
+  const name = deptForm.value.name.trim()
+  if (!name) return
+  
+  const tempId = referenceStore.optimisticallyAddDept(name)
+  deptForm.value.name = ''
+  isAdding.value = false
+  
   try {
-    await addDepartment(deptForm.value.name.trim())
-    deptForm.value.name = ''
-    isAdding.value = false
-    await fetchData()
+    await addDepartment(name)
+    // Silently refresh in background to get real ID and server state
+    await referenceStore.fetchDepartments(true)
   } catch (err) {
+    referenceStore.rollbackDept(tempId)
     alert('Error adding department: ' + err.message)
-  } finally {
-    loading.value = false
   }
 }
 
 async function handleAddSupplier() {
-  if (!supplierForm.value.name.trim()) return
-  loading.value = true
+  const data = { ...supplierForm.value }
+  if (!data.name.trim()) return
+  
+  let tempId = null
+  if (!editingId.value) {
+    tempId = referenceStore.optimisticallyAddSupplier(data)
+  }
+
+  isAdding.value = false
+  const isEdit = !!editingId.value
+  const existingId = editingId.value
+  resetSupplierForm()
+  
   try {
-    if (editingId.value) {
-      await updateSupplier(editingId.value, { ...supplierForm.value })
+    if (isEdit) {
+      await updateSupplier(existingId, data)
     } else {
-      await addSupplier({ ...supplierForm.value })
+      await addSupplier(data)
     }
-    resetSupplierForm()
-    isAdding.value = false
-    await fetchData()
+    await referenceStore.fetchSuppliers(true)
   } catch (err) {
+    if (tempId) referenceStore.rollbackSupplier(tempId)
     alert('Error saving supplier: ' + err.message)
-  } finally {
-    loading.value = false
   }
 }
 
@@ -239,7 +241,7 @@ async function confirmImport() {
     }
     showImportModal.value = false
     importPreview.value = []
-    await fetchData()
+    await referenceStore.fetchSuppliers(true)
     if (failCount > 0) {
       alert(`Import done: ${successCount} added, ${failCount} failed.`)
     }
@@ -253,7 +255,7 @@ async function confirmImport() {
 async function toggleDeptStatus(dept) {
   try {
     await updateDepartment(dept.id, { isActive: !dept.isActive })
-    dept.isActive = !dept.isActive
+    await referenceStore.fetchDepartments(true)
   } catch (err) {
     alert('Error updating status: ' + err.message)
   }
@@ -262,7 +264,7 @@ async function toggleDeptStatus(dept) {
 async function toggleSupplierStatus(supplier) {
   try {
     await updateSupplier(supplier.id, { isActive: !supplier.isActive })
-    supplier.isActive = !supplier.isActive
+    await referenceStore.fetchSuppliers(true)
   } catch (err) {
     alert('Error updating status: ' + err.message)
   }

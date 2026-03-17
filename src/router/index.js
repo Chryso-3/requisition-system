@@ -78,6 +78,12 @@ const router = createRouter({
           component: () => import('@/views/MyRequisitionsView.vue'),
         },
         {
+          path: 'requisitions/:id/edit',
+          name: 'edit-requisition',
+          component: () => import('@/views/EditRequisitionView.vue'),
+          meta: { roles: [USER_ROLES.REQUESTER, USER_ROLES.SUPER_ADMIN] },
+        },
+        {
           path: 'pending-approvals',
           redirect: '/all-requisitions',
         },

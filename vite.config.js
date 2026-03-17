@@ -17,5 +17,25 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-router', 'pinia'],
+          'vendor-firebase': ['firebase/app', 'firebase/firestore', 'firebase/auth', 'firebase/storage'],
+          'admin-views': [
+            './src/views/admin/AdminUsersView.vue',
+            './src/views/admin/AdminReferenceDataView.vue',
+            './src/views/admin/AdminSystemSettingsView.vue'
+          ],
+          'procurement-views': [
+            './src/views/ProcurementHubView.vue',
+            './src/views/PurchaseListView.vue',
+            './src/views/CanvassListView.vue'
+          ]
+        }
+      }
+    }
   }
 })

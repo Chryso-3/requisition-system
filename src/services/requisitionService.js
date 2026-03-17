@@ -797,6 +797,28 @@ export async function createRequisitionDocument(data) {
   })
 
   const docRef = await addDoc(collection(db, COLLECTIONS.REQUISITIONS), requisition)
+
+  // Audit Log Entry for Creation
+  if (initialStatus !== REQUISITION_STATUS.DRAFT) {
+    await appendTransactionLog(
+      docRef.id,
+      {
+        action: 'created',
+        userId: data.requestedBy?.userId ?? '',
+        name: data.requestedBy?.name ?? 'Requestor',
+        title: 'Requestor',
+        email: data.requestedBy?.email ?? '',
+        step: 'creation',
+      },
+      {
+        statusBefore: '',
+        statusAfter: initialStatus,
+        rfControlNo: rfControlNo,
+        purpose: (data.purpose ?? '').slice(0, 200),
+      },
+    )
+  }
+
   return { id: docRef.id, ...requisition }
 }
 
@@ -2223,6 +2245,33 @@ export async function submitRequisition(id, updates = {}) {
     ...updates,
   })
 
+  // 1. Log the submission in Transaction Log
+  try {
+    const req = await getRequisition(id)
+    if (req) {
+      await appendTransactionLog(
+        id,
+        {
+          action: 'submitted',
+          userId: req.requestedBy?.userId || '',
+          name: req.requestedBy?.name || 'Requestor',
+          title: 'Requestor',
+          email: req.requestedBy?.email || '',
+          step: 'submission',
+          remarks: 'Submitted for approval',
+        },
+        {
+          statusBefore: 'DRAFT',
+          statusAfter: REQUISITION_STATUS.PENDING_RECOMMENDATION,
+          rfControlNo: req.rfControlNo,
+          purpose: (req.purpose || '').slice(0, 200),
+        },
+      )
+    }
+  } catch (err) {
+    console.warn('[submitRequisition] Failed to log transaction:', err)
+  }
+
   // Notification: Notify Assigned Approver and Requestor (Receipt)
   try {
     let req = await getRequisition(id)
@@ -2270,6 +2319,25 @@ export async function submitRequisition(id, updates = {}) {
   } catch (e) {
     console.error('Submission notification error:', e)
   }
+
+  // Audit Log Entry for Submission
+  await appendTransactionLog(
+    id,
+    {
+      action: 'submitted',
+      userId: updates.requestedBy?.userId ?? '',
+      name: updates.requestedBy?.name ?? 'Requestor',
+      title: 'Requestor',
+      email: updates.requestedBy?.email ?? '',
+      step: 'submission',
+    },
+    {
+      statusBefore: REQUISITION_STATUS.DRAFT,
+      statusAfter: REQUISITION_STATUS.PENDING_RECOMMENDATION,
+      rfControlNo: (await getRequisition(id))?.rfControlNo ?? '',
+      purpose: ((await getRequisition(id))?.purpose ?? '').slice(0, 200),
+    },
+  )
 
   return res
 }
@@ -2384,6 +2452,58 @@ export async function listAuditLogEntries(options = {}) {
 export async function deleteTransactionLogEntry(entryId) {
   const ref = doc(db, COLLECTIONS.TRANSACTION_LOG, entryId)
   await deleteDoc(ref)
+}
+
+/**
+ * Fetch all transaction log entries for a specific requisition ID.
+ * Used to show complete history regardless of main log pagination.
+ */
+export async function getAuditLogsForRequisition(requisitionId, rfControlNo = null) {
+  if (!requisitionId && !rfControlNo) return []
+  
+  // 1. Determine RF number to search by
+  let rf = rfControlNo
+  if (!rf && requisitionId) {
+    const req = await getRequisition(requisitionId)
+    rf = req?.rfControlNo
+  }
+  
+  // 2. Query by ID (if available)
+  let qId = null
+  if (requisitionId) {
+    qId = query(
+      collection(db, COLLECTIONS.TRANSACTION_LOG),
+      where('requisitionId', '==', requisitionId)
+    )
+  }
+  
+  // 3. Query by RF (if available)
+  let qRf = null
+  if (rf) {
+    qRf = query(
+      collection(db, COLLECTIONS.TRANSACTION_LOG),
+      where('rfControlNo', '==', rf)
+    )
+  }
+
+  const [snapId, snapRf] = await Promise.all([
+    getDocs(qId),
+    rf ? getDocs(qRf) : Promise.resolve({ docs: [] })
+  ])
+
+  // 4. Merge and deduplicate
+  const map = new Map()
+  const allDocs = [...snapId.docs, ...snapRf.docs]
+  allDocs.forEach(d => {
+    map.set(d.id, { id: d.id, ...d.data() })
+  })
+
+  // 5. Final Sort (Map doesn't preserve custom order well after merge)
+  return Array.from(map.values()).sort((a, b) => {
+    const dateA = a.signedAt ? (a.signedAt.toDate ? a.signedAt.toDate() : new Date(a.signedAt)) : 0
+    const dateB = b.signedAt ? (b.signedAt.toDate ? b.signedAt.toDate() : new Date(b.signedAt)) : 0
+    return dateB - dateA
+  })
 }
 
 /**

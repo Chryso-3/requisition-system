@@ -9,7 +9,8 @@ import {
   markRequisitionReceived,
   generateCanvassNo,
 } from '@/services/requisitionService'
-import { getSuppliers, addSupplier } from '@/services/adminService'
+import { addSupplier } from '@/services/adminService'
+import { useReferenceStore } from '@/stores/reference'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
 import {
   REQUISITION_STATUS,
@@ -46,7 +47,8 @@ const canvassDate = ref('')
 const supplier = ref('')
 const canvassItems = ref([])
 const receivedAt = ref('')
-const allSuppliers = ref([])
+const referenceStore = useReferenceStore()
+const allSuppliers = computed(() => referenceStore.suppliers)
 const saveToRegistry = ref(false)
 const showSupplierSuggestions = ref(false)
 
@@ -118,13 +120,7 @@ async function openMarkCanvassed(r) {
   actionError.value = ''
 
   // Fetch suppliers if not already loaded
-  if (allSuppliers.value.length === 0) {
-    try {
-      allSuppliers.value = await getSuppliers()
-    } catch (e) {
-      console.error('Failed to pre-fetch suppliers:', e)
-    }
-  }
+  referenceStore.fetchSuppliers()
 }
 
 function closeCanvassModal() {
@@ -158,8 +154,8 @@ async function saveMarkCanvassed() {
     if (saveToRegistry.value && isNewSupplier.value) {
       try {
         await addSupplier({ name: supplierName })
-        // Update local list for next time
-        allSuppliers.value = await getSuppliers()
+        // Refresh reference store for all components
+        await referenceStore.fetchSuppliers(true)
       } catch (err) {
         console.error('Failed to auto-register supplier:', err)
         // Benefit of doubt: proceed with canvass even if registry save fails
@@ -174,6 +170,10 @@ async function saveMarkCanvassed() {
       items: canvassItems.value,
       signatureData: authStore.userProfile?.signatureData,
     })
+    
+    // OPTIMISTIC: remove from local list immediately
+    canvassingList.value = canvassingList.value.filter(item => item.id !== modalCanvass.value.id)
+    
     closeCanvassModal()
   } catch (e) {
     actionError.value = e?.message || 'Failed to submit canvass.'
@@ -211,6 +211,10 @@ async function saveMarkReceived() {
         : null,
       signatureData: authStore.userProfile?.signatureData,
     })
+    
+    // OPTIMISTIC: remove from local list immediately
+    receivingList.value = receivingList.value.filter(item => item.id !== modalReceived.value.id)
+    
     closeReceivedModal()
   } catch (e) {
     actionError.value = e?.message || 'Failed to mark as received.'

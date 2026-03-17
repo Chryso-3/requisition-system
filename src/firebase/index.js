@@ -1,5 +1,5 @@
 import { initializeApp, getApp, getApps } from 'firebase/app'
-import { initializeFirestore, getFirestore, memoryLocalCache } from 'firebase/firestore'
+import { initializeFirestore, getFirestore, persistentLocalCache } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
 import { getStorage } from 'firebase/storage'
 import { getFunctions } from 'firebase/functions'
@@ -25,7 +25,7 @@ try {
 } catch (e) {
   // If not initialized, do it once with custom settings
   dbInstance = initializeFirestore(app, {
-    localCache: memoryLocalCache(),
+    localCache: persistentLocalCache(),
     experimentalForceLongPolling: true,
   })
 }

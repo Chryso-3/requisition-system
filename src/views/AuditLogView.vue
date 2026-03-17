@@ -3,6 +3,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   listAuditLogEntries,
+  getAuditLogsForRequisition,
   getRequisition,
   deleteTransactionLogEntry,
 } from '@/services/requisitionService'
@@ -24,6 +25,8 @@ const lastDoc = ref(null)
 const hasMore = ref(true)
 const tableContainer = ref(null)
 const expandedRows = ref([])
+const loadedHistories = ref({})
+const loadingHistories = ref({})
 const requisitionStatusMap = ref({})
 const showHowToRead = ref(false)
 const showDownloadConfirmModal = ref(false)
@@ -198,33 +201,59 @@ const downloadScopeLabel = computed(() => {
 
 const totalEntries = computed(() => filteredLogEntries.value.length)
 
-// Requisition-First Journaling Logic: Grouping entries by Requisition ID
+// Requisition-First Journaling Logic: Grouping uniquely by Requisition ID
 const journaledJourneys = computed(() => {
-  const journeys = []
-
-  // 1. Group FILTERED entries by requisitionId to find full journeys
   const map = {}
+
   filteredLogEntries.value.forEach((entry) => {
-    if (!map[entry.requisitionId]) {
-      map[entry.requisitionId] = {
-        requisitionId: entry.requisitionId,
-        rfControlNo: entry.rfControlNo,
+    const entryDate = entrySignedAt(entry)
+    if (!entryDate) return
+    const id = entry.requisitionId
+    const rf = (entry.rfControlNo || '').trim() || id // Prioritize RF Number for visual grouping
+    if (!id && !rf) return
+
+    if (!map[rf]) {
+      map[rf] = {
+        segmentId: rf,
+        requisitionId: id, // Initial guess
+        rfControlNo: rf,
         purpose: entry.purpose,
         latestAt: entry.signedAt,
         entries: [],
       }
     }
-    map[entry.requisitionId].entries.push(entry)
-    // Update latest timestamp if needed (though they are usually sorted desc)
-    const entryDate = entrySignedAt(entry)
-    const currentLatest = entrySignedAt({ signedAt: map[entry.requisitionId].latestAt })
-    if (entryDate && (!currentLatest || entryDate > currentLatest)) {
-      map[entry.requisitionId].latestAt = entry.signedAt
+
+    const journey = map[rf]
+    journey.entries.push(entry)
+    
+    // If the group didn't have a requisitionId yet (e.g. from an old log),
+    // but this entry has one, update the group's ID.
+    if (!journey.requisitionId && id) {
+      journey.requisitionId = id
+    }
+
+    const d = entrySignedAt(entry)
+    const currentLatest = entrySignedAt({ signedAt: journey.latestAt })
+    if (d && currentLatest && d > currentLatest) {
+      journey.latestAt = entry.signedAt
+      // Update status to reflect the latest action's outcome
+      if (entry.statusAfter) {
+        journey.status = entry.statusAfter
+      }
+    }
+    
+    // Fallback: if status is still missing, use entry's statusAfter even if not the latest (best effort)
+    if (!journey.status && entry.statusAfter) {
+      journey.status = entry.statusAfter
     }
   })
 
-  // 2. Convert map to list and sort by latest action
-  return Object.values(map).sort((a, b) => new Date(b.latestAt) - new Date(a.latestAt))
+  // Sort journeys descending by their overall latest action
+  return Object.values(map).sort((a, b) => {
+    const dA = entrySignedAt({ signedAt: a.latestAt })
+    const dB = entrySignedAt({ signedAt: b.latestAt })
+    return (dB || 0) - (dA || 0)
+  })
 })
 
 const totalJourneys = computed(() => journaledJourneys.value.length)
@@ -243,7 +272,7 @@ function handlePageChange(p) {
     tableContainer.value.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // If we are reaching the end of the buffered log entries, load more from Firestore
+  // If we are reaching the end of the buffered structured elements, load more from Firestore
   if (p * pageSize.value > journaledJourneys.value.length - 15 && hasMore.value && !loading.value) {
     loadMore()
   }
@@ -288,22 +317,29 @@ function getDateLabel(date) {
 }
 
 // Journey Trail Helpers
+// Journey Trail Helpers
 function getJourneyTrail(journey) {
-  // 1. Determine the absolute "Truth" status for this journey
+  if (!journey || !journey.entries) return []
+  
   const reqId = journey.requisitionId
-  const rMapStatus = (requisitionStatusMap.value[reqId]?.status || '').toLowerCase()
+  const rMap = requisitionStatusMap.value[reqId] || {}
+  const rMapStatus = (rMap.status || '').toLowerCase()
+  const canvassStatus = (rMap.canvassStatus || '').toLowerCase()
+  const poStatus = (rMap.poStatus || '').toLowerCase()
+  const purchaseStatus = (rMap.purchaseStatus || '').toLowerCase()
 
-  // Also scan all entries in this journey; if ANY were approved, it's at least approved
   const anyApprovedInHistory = journey.entries.some((e) => {
-    const action = (e.action || '').toLowerCase()
-    const status = (e.statusAfter || '').toLowerCase()
-    return action === 'approved' || status === 'approved' || action === 'po_approved'
+    const a = (e.action || '').toLowerCase()
+    const s = (e.statusAfter || '').toLowerCase()
+    return a === 'approved' || s === 'approved' || a === 'po_approved'
   })
 
-  // Final determination: map status takes precedence, then history scan, then latest entry
-  const globalStatus =
+  const approvedStatuses = ['approved', 'canvassed', 'submitted_to_bac', 'order_created', 'po_issued', 'received', 'closed']
+  const isPostApproved = approvedStatuses.includes(rMapStatus) || anyApprovedInHistory
+
+  const requisitionStatus =
     rMapStatus ||
-    (anyApprovedInHistory ? 'approved' : (journey.entries[0]?.statusAfter || 'draft').toLowerCase())
+    (isPostApproved ? 'approved' : (journey.entries[0]?.statusAfter || 'draft').toLowerCase())
 
   const steps = [
     { label: 'Dept', status: 'pending_recommendation' },
@@ -311,49 +347,71 @@ function getJourneyTrail(journey) {
     { label: 'Budget', status: 'pending_budget' },
     { label: 'Audit', status: 'pending_audit' },
     { label: 'GM', status: 'pending_approval' },
+    { label: 'Canvass', id: 'canvass' },
+    { label: 'PO', id: 'po' },
+    { label: 'Done', id: 'done' },
   ]
 
-  const statusMap = {
+  const requisitionStatusMapIndices = {
     draft: -1,
     pending_recommendation: 0,
     pending_inventory: 1,
     pending_budget: 2,
     pending_audit: 3,
     pending_approval: 4,
-    approved: 5,
-    rejected: 99,
   }
+  approvedStatuses.forEach(s => { requisitionStatusMapIndices[s] = 5 })
 
-  const currentIndex = statusMap[globalStatus] ?? -1
+  const reqIndex = requisitionStatusMapIndices[requisitionStatus] ?? (isPostApproved ? 5 : -1)
 
   return steps.map((s, idx) => {
-    // Persistent Green: If global status is approved, all these 5 steps are green
-    let isDone = idx < currentIndex || globalStatus === 'approved'
-    // Persistent Active: Only show if not fully approved
-    let isActive = globalStatus !== 'approved' && idx === currentIndex
+    let isDone = false
+    let isActive = false
     let isFailed = false
+    let isCanvassedStep = false
+    let isPOStep = false
+    let isReceivedStep = false
 
-    if (globalStatus === 'rejected') {
-      const rejectedEntry = journey.entries.find((e) => {
-        const a = (e.action || '').toLowerCase()
-        return a === 'declined' || a === 'rejected' || a === 'po_rejected'
-      })
-      const rejectedAt = rejectedEntry?.step || ''
-      const stepIndex = steps.findIndex(
-        (step) =>
-          step.status.includes(rejectedAt) ||
-          rejectedAt.includes(step.label.toLowerCase()) ||
-          (rejectedAt === 'purchaser' && idx === 4), // Fails after GM
-      )
-
-      if (idx === stepIndex) isFailed = true
-      if (idx < stepIndex) isDone = true
+    if (idx < 5) {
+      isDone = idx < reqIndex || isPostApproved || requisitionStatus === 'approved'
+      isActive = !isPostApproved && idx === reqIndex
+      
+      if (requisitionStatus === 'rejected') {
+        const rejectedEntry = journey.entries.find((e) => {
+          const act = (e.action || '').toLowerCase()
+          return (act === 'declined' || act === 'rejected') && !act.includes('po_')
+        })
+        const rejectedAt = rejectedEntry?.step || ''
+        const failIdx = steps.slice(0, 5).findIndex(step => 
+          step.status.includes(rejectedAt) || rejectedAt.includes(step.label.toLowerCase())
+        )
+        if (idx === failIdx) isFailed = true
+        if (idx < failIdx) isDone = true
+      }
+    } else if (idx === 5) {
+      const hasCanvassAction = journey.entries.some(e => e.action?.toLowerCase() === 'canvassed')
+      isCanvassedStep = hasCanvassAction || ['canvassed', 'submitted_to_bac', 'order_created'].includes(canvassStatus) || rMapStatus === 'canvassed'
+      isDone = (canvassStatus !== 'pending' && canvassStatus !== '') || isCanvassedStep
+      isActive = isPostApproved && (canvassStatus === 'pending' || !canvassStatus) && purchaseStatus !== 'received'
+    } else if (idx === 6) {
+      const hasPOAction = journey.entries.some(e => ['ordered', 'po_issued'].includes(e.action?.toLowerCase()))
+      isPOStep = hasPOAction || poStatus === 'approved' || purchaseStatus === 'received'
+      isDone = isPOStep
+      isActive = !isDone && (poStatus && poStatus !== 'rejected')
+      if (poStatus === 'rejected') isFailed = true
+    } else if (idx === 7) {
+      isReceivedStep = purchaseStatus === 'received'
+      isDone = isReceivedStep
+      isActive = (poStatus === 'approved' || poStatus === 'po_issued') && !isReceivedStep
     }
 
     return {
       ...s,
       active: isActive,
-      done: isDone,
+      done: isDone && !isCanvassedStep && !isPOStep && !isReceivedStep,
+      canvassed: isCanvassedStep,
+      po: isPOStep,
+      received: isReceivedStep,
       failed: isFailed,
     }
   })
@@ -391,7 +449,7 @@ function withTimeout(promise, ms = REQUEST_TIMEOUT) {
 
 function mapLogEntry(entry, index) {
   return {
-    id: entry.id,
+    id: entry.id || `synth-${index}-${entry.requisitionId || 'log'}-${entry.step || 'step'}`,
     requisitionId: entry.requisitionId,
     rfControlNo: entry.rfControlNo ?? entry.requisitionId ?? '—',
     purpose: entry.purpose || '—',
@@ -401,13 +459,13 @@ function mapLogEntry(entry, index) {
     title: entry.title ?? '',
     email: entry.email ?? '',
     purchaseStatus: entry.purchaseStatus ?? '',
+    canvassNumber: entry.canvassNumber ?? '',
     poNumber: entry.poNumber ?? '',
     signedAt: entry.signedAt,
     statusBefore: entry.statusBefore ?? '',
     statusAfter: entry.statusAfter ?? '',
-    title: entry.title ?? '',
     remarks: entry.remarks ?? '',
-    displayKey: `${index}-${entry.requisitionId ?? entry.rfControlNo ?? 'log'}`,
+    displayKey: `entry-${index}-${entry.signedAt?.valueOf ? entry.signedAt.valueOf() : entry.signedAt}-${entry.userId || 'anon'}`,
   }
 }
 
@@ -632,35 +690,146 @@ function isExpanded(key) {
   return expandedRows.value.includes(key)
 }
 
-function toggleExpand(key) {
-  const i = expandedRows.value.indexOf(key)
-  if (i === -1) expandedRows.value.push(key)
-  else expandedRows.value.splice(i, 1)
+async function toggleExpand(segment) {
+  const i = expandedRows.value.indexOf(segment.segmentId)
+  if (i === -1) {
+    expandedRows.value.push(segment.segmentId)
+    
+    // Fetch full history using the requisitionId if not already loaded into this segmentId bucket
+    if (!loadedHistories.value[segment.segmentId] && !loadingHistories.value[segment.segmentId]) {
+      loadingHistories.value[segment.segmentId] = true
+      try {
+        // Use dual-query search (ID + RF) for maximum history retrieval
+        const fullLogs = await getAuditLogsForRequisition(segment.requisitionId, segment.rfControlNo)
+        let mapped = fullLogs.map((e, index) => mapLogEntry(e, index))
+
+        // Get the current requisition document for synthesis
+        const req = await getRequisition(segment.requisitionId)
+        if (req) {
+          const synth = []
+          
+          // 1. Scan the "internalAuditorLog" array (often holds early approvals)
+          if (Array.isArray(req.internalAuditorLog)) {
+            req.internalAuditorLog.forEach(l => {
+              synth.push({ ...l, requisitionId: req.id, rfControlNo: req.rfControlNo })
+            })
+          }
+
+          // 2. Comprehensive Workflow Scan (Detects any footprint in the document)
+          const signatureFields = [
+            { f: 'requestedBy', s: 'submission', t: 'Requestor', a: 'submitted' },
+            { f: 'recommendingApproval', s: 'section_head', t: 'Section Head', a: 'approved' },
+            { f: 'inventoryChecked', s: 'warehouse_head', t: 'Warehouse Section Head', a: 'approved' },
+            { f: 'budgetApproved', s: 'budget_officer', t: 'Budget Officer', a: 'approved' },
+            { f: 'checkedBy', s: 'internal_auditor', t: 'Internal Auditor', a: 'approved' },
+            { f: 'approvedBy', s: 'general_manager', t: 'General Manager', a: 'approved' },
+            { f: 'canvassBy', s: 'purchaser_canvass', t: 'Purchaser', a: 'canvassed' },
+            { f: 'poBudgetApproved', s: 'po_budget', t: 'Budget Officer (PO)', a: 'po_approved' },
+            { f: 'poAuditApproved', s: 'po_audit', t: 'Internal Auditor (PO)', a: 'po_approved' },
+            { f: 'poGMApproved', s: 'po_gm', t: 'General Manager (PO)', a: 'po_approved' },
+            { f: 'rejectedBy', s: 'rejected', t: 'Approver', a: 'declined' },
+            { f: 'poRejectedBy', s: 'po_rejected', t: 'Approver (PO)', a: 'po_rejected' },
+            { f: 'voidedBy', s: 'voided_admin', t: 'Super Admin', a: 'voided' },
+          ]
+
+          signatureFields.forEach((wf) => {
+            const data = req[wf.f]
+            if (data?.signedAt) {
+              const item = {
+                ...data,
+                action: data.action || wf.a || 'approved',
+                step: data.step || wf.s,
+                title: data.title || wf.t,
+                requisitionId: req.id,
+                rfControlNo: req.rfControlNo,
+                remarks: data.remarks || '',
+              }
+              // Basic dedupe: if action + date exists, skip it
+              const exists = synth.some(s => s.action === item.action && s.signedAt === item.signedAt)
+              if (!exists) synth.push(item)
+            }
+          })
+
+          if (synth.length > 0) {
+            // Aggressive Content-Based Deduplication
+            // Treat entries as identical if they have the same action and happen within a narrow time window.
+            const getContentKey = (e) => {
+              const action = (e.action || '').toLowerCase()
+              const d = entrySignedAt(e)
+              const timeBucket = d ? Math.floor(d.getTime() / 600000) : '' // 10 minute buckets
+              // We intentionally omit userId/name here because legacy fields vs logs might differ in how they store user info
+              // but the action + time effectively identifies the unique event.
+              return `${action}-${timeBucket}`
+            }
+
+            const seenActions = new Set(mapped.map(getContentKey))
+            
+            const filteredSynth = synth.filter(s => {
+              const key = getContentKey(s)
+              if (seenActions.has(key)) return false
+              seenActions.add(key)
+              return true
+            })
+
+            if (filteredSynth.length > 0) {
+              const mappedSynth = filteredSynth.map((s, idx) => mapLogEntry(s, 8000 + idx))
+              mapped = [...mapped, ...mappedSynth].sort((a, b) => {
+                const dateA = entrySignedAt(a)
+                const dateB = entrySignedAt(b)
+                return (dateB || 0) - (dateA || 0)
+              })
+            }
+          }
+          
+          // Final safety: deduplicate the merged list one more time 
+          // (in case the original logs themselves had duplicates)
+          const finalMap = new Map()
+          mapped.forEach(m => {
+            const date = entrySignedAt(m)
+            const key = `${(m.action || '').toLowerCase()}-${date ? date.getTime() : ''}-${m.userId || ''}`
+            if (!finalMap.has(key)) {
+              finalMap.set(key, m)
+            }
+          })
+          mapped = Array.from(finalMap.values())
+        }
+
+        loadedHistories.value[segment.segmentId] = mapped
+      } catch (err) {
+        console.error('Failed to load full history:', err)
+      } finally {
+        loadingHistories.value[segment.segmentId] = false
+      }
+    }
+  } else {
+    expandedRows.value.splice(i, 1)
+  }
 }
 
 // Purchase/action badge helpers
 function badgeKey(entry) {
   const action = (entry.action || '').toLowerCase()
-  if (action === 'po_rejected') return 'declined'
-  if (action === 'po_approved') return 'approved'
+  
+  // 1. Explicit history actions take precedence (for expanded rows)
+  if (action === 'created' || action === 'submitted') return 'default'
+  if (action === 'approved' || action === 'po_approved') return 'approved'
+  if (action === 'declined' || action === 'rejected' || action === 'po_rejected' || action === 'voided') return 'declined'
+  if (action === 'canvassed') return 'canvassed'
+  if (action === 'ordered' || action === 'po_issued') return 'ordered'
+  if (action === 'received') return 'received'
 
-  const ps = (
-    entry.purchaseStatus ||
-    requisitionStatusMap.value[entry.requisitionId]?.purchaseStatus ||
-    ''
-  ).toLowerCase()
-  if (ps === 'ordered' || ps === 'received') return ps
-  if (ps === 'approved') return 'approved'
-  if (ps === 'declined' || ps === 'rejected') return 'declined'
+  // 2. Specific status on the entry itself (synthesis fallback)
+  const entryPs = (entry.purchaseStatus || '').toLowerCase()
+  if (entryPs === 'ordered' || entryPs === 'received') return entryPs
+  if (entryPs === 'approved') return 'approved'
+  if (entryPs === 'declined' || entryPs === 'rejected') return 'declined'
 
-  if (
-    action === 'approved' ||
-    action === 'ordered' ||
-    action === 'po_issued' ||
-    action === 'received' ||
-    action === 'declined'
-  )
-    return action === 'po_issued' ? 'ordered' : action
+  // 3. Fallback to global requisition status (primarily for Journey row summary)
+  const globalPs = (requisitionStatusMap.value[entry.requisitionId]?.purchaseStatus || '').toLowerCase()
+  if (globalPs === 'ordered' || globalPs === 'received') return globalPs
+  if (globalPs === 'approved') return 'approved'
+  if (globalPs === 'declined' || globalPs === 'rejected') return 'declined'
+  
   return 'default'
 }
 
@@ -668,6 +837,8 @@ function badgeText(entry) {
   // Priority 1: Specific action taken in this log entry
   const action = (entry.action || '').toLowerCase()
   if (action) {
+    if (action === 'created') return 'Created'
+    if (action === 'submitted') return 'Submitted'
     if (action === 'po_rejected') return 'PO Rejected'
     if (action === 'approved' || action === 'po_approved') return 'Approved'
     if (action === 'declined' || action === 'rejected') return 'Declined'
@@ -733,6 +904,8 @@ function whatHappened(entry) {
   if (action === 'ordered') return 'Purchase Order Issued'
   if (action === 'received') return 'Items Received & Logged'
 
+  if (action === 'submitted') return 'Requisition Submitted for Approval'
+
   if (action === 'force_advance') return '[ADMIN OVERRIDE] Stage Passed'
 
   return 'Workflow Stage Updated'
@@ -749,7 +922,10 @@ async function updateRequisitionStatusMap() {
     requisitionStatusMap.value[id] = {
       status: r?.status ?? '',
       purchaseStatus: r?.purchaseStatus ?? '',
+      canvassStatus: r?.canvassStatus ?? '',
+      poStatus: r?.poStatus ?? '',
       poNumber: r?.poNumber ?? '',
+      requestedByName: r?.requestedBy?.name ?? '—',
     }
   })
 }
@@ -850,13 +1026,16 @@ onMounted(load)
                 <div class="legend-row">
                   <span class="status-dot approved"></span> Success / Approval
                 </div>
+                <div class="legend-row">
+                  <span class="status-dot canvassed"></span> Canvassed
+                </div>
                 <div class="legend-row"><span class="status-dot ordered"></span> PO Processing</div>
                 <div class="legend-row">
                   <span class="status-dot received"></span> Items Received
                 </div>
                 <div class="legend-row"><span class="status-dot declined"></span> Declined</div>
                 <div class="legend-row">
-                  <span class="status-dot"></span> Initial Submission / Step
+                  <span class="status-dot"></span> Initial Submission / Draft
                 </div>
               </div>
               <div class="legend-section">
@@ -885,7 +1064,8 @@ onMounted(load)
               <table class="data-table">
                 <thead>
                   <tr class="glass-header">
-                    <th style="width: 120px">RF Number</th>
+                    <th style="width: 130px">RF Number</th>
+                    <th style="width: 180px; text-align: left">Requestor</th>
                     <th style="width: 160px">Latest Action</th>
                     <th class="purpose-header" style="text-align: left">Purpose</th>
                     <th style="width: 200px; text-align: center">Workflow Progress</th>
@@ -895,14 +1075,14 @@ onMounted(load)
                 </thead>
                 <tbody v-for="group in groupedJourneys" :key="group.date">
                   <tr class="date-divider">
-                    <td colspan="6">{{ group.label }}</td>
+                    <td colspan="7">{{ group.label }}</td>
                   </tr>
                   <template v-for="journey in group.journeys" :key="journey.requisitionId">
                     <tr
                       class="journey-row"
-                      :class="{ 'is-expanded': isExpanded(journey.requisitionId) }"
+                      :class="{ 'is-expanded': isExpanded(journey.segmentId) }"
                       title="Double-click to view record"
-                      @click="toggleExpand(journey.requisitionId)"
+                      @click="toggleExpand(journey)"
                       @dblclick="goToDetail(journey.requisitionId)"
                     >
                       <td class="rf-cell" @click.stop="goToDetail(journey.requisitionId)">
@@ -910,6 +1090,11 @@ onMounted(load)
                         <span class="velocity-tag" v-if="getVelocity(journey)"
                           >{{ getVelocity(journey).split(' ')[0] }}d</span
                         >
+                      </td>
+                      <td class="requestor-cell">
+                        <span class="requestor-name text-truncate" :title="requisitionStatusMap[journey.requisitionId]?.requestedByName">
+                          {{ requisitionStatusMap[journey.requisitionId]?.requestedByName || '—' }}
+                        </span>
                       </td>
                       <td class="action-cell">
                         <span class="badge-pill" :class="badgeKey(journey.entries[0])">
@@ -925,7 +1110,14 @@ onMounted(load)
                             v-for="(step, idx) in getJourneyTrail(journey)"
                             :key="idx"
                             class="mini-step"
-                            :class="{ done: step.done, active: step.active, failed: step.failed }"
+                              :class="{ 
+                                done: step.done, 
+                                active: step.active, 
+                                failed: step.failed, 
+                                canvassed: step.canvassed,
+                                po: step.po,
+                                received: step.received
+                              }"
                             :title="step.label"
                           ></div>
                         </div>
@@ -937,17 +1129,33 @@ onMounted(load)
                         <div>{{ formatDate(journey.latestAt).split(',')[1] }}</div>
                       </td>
                       <td class="toggle-cell">
-                        <span class="chevron" :class="{ open: isExpanded(journey.requisitionId) }"
-                          >▼</span
-                        >
+                        <div class="d-flex align-items-center">
+                          <button 
+                            v-if="journey.status === 'DRAFT' || journey.status === 'PENDING_RECOMMENDATION'"
+                            class="btn btn-sm btn-outline-primary mr-2"
+                            style="padding: 2px 8px; font-size: 0.75rem;"
+                            @click.stop="$router.push(`/requisitions/${journey.requisitionId}/edit`)"
+                          >
+                            <i class="feather icon-edit-2"></i> Edit
+                          </button>
+                          <span class="chevron" :class="{ open: isExpanded(journey.segmentId) }"
+                            >▼</span
+                          >
+                        </div>
                       </td>
                     </tr>
-                    <tr v-if="isExpanded(journey.requisitionId)" class="history-row">
-                      <td colspan="6" class="history-cell">
+                    <tr v-if="isExpanded(journey.segmentId)" class="history-row">
+                      <td colspan="7" class="history-cell">
                         <div class="compact-history">
                           <table class="sub-table">
+                            <tr v-if="loadingHistories[journey.segmentId]">
+                              <td colspan="6" style="text-align: center; padding: 1rem" class="muted">
+                                Loading complete history...
+                              </td>
+                            </tr>
                             <tr
-                              v-for="entry in journey.entries"
+                              v-else
+                              v-for="entry in (loadedHistories[journey.segmentId] || journey.entries)"
                               :key="entry.displayKey"
                               :class="{
                                 'override-entry':
@@ -967,10 +1175,16 @@ onMounted(load)
                                 <span class="badge-pill" :class="badgeKey(entry)">
                                   {{ badgeText(entry) }}
                                 </span>
+                                <div v-if="entry.canvassNumber" class="identifier-subtext">
+                                  {{ entry.canvassNumber }}
+                                </div>
+                                <div v-if="entry.poNumber" class="identifier-subtext">
+                                  {{ entry.poNumber }}
+                                </div>
                               </td>
                               <td class="remarks-text">{{ entry.remarks || '-' }}</td>
-                              <td style="width: 90px; text-align: right" class="muted time-ago">
-                                {{ timeSince(entry.signedAt) }}
+                              <td style="width: 140px; text-align: right" class="muted time-ago">
+                                {{ formatDate(entry.signedAt) }}
                               </td>
                             </tr>
                           </table>
@@ -1401,6 +1615,18 @@ onMounted(load)
   min-width: 200px;
 }
 
+.requestor-cell {
+  padding: 1rem 0.5rem;
+}
+
+.requestor-name {
+  display: block;
+  font-size: 0.9rem;
+  color: #334155;
+  font-weight: 500;
+  max-width: 170px;
+}
+
 .purpose-cell {
   color: #6b7280;
   display: -webkit-box;
@@ -1441,9 +1667,25 @@ onMounted(load)
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
 }
 
+/* PO phase dots also blue when done */
+.mini-step.po {
+  background: #3b82f6;
+  box-shadow: 0 1px 2px rgba(59, 130, 246, 0.2);
+}
+
 .mini-step.failed {
   background: #ef4444;
   box-shadow: 0 1px 2px rgba(239, 68, 68, 0.2);
+}
+
+.mini-step.canvassed {
+  background: #f59e0b;
+  box-shadow: 0 1px 2px rgba(245, 158, 11, 0.2);
+}
+
+.mini-step.received {
+  background: #8b5cf6;
+  box-shadow: 0 1px 2px rgba(139, 92, 246, 0.2);
 }
 
 .time-cell {
@@ -1502,6 +1744,26 @@ onMounted(load)
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
 }
 
+.status-dot.canvassed {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+}
+
+.history-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.history-dot.approved { background: #10b981; }
+.history-dot.ordered { background: #3b82f6; }
+.history-dot.received { background: #8b5cf6; }
+.history-dot.declined { background: #ef4444; }
+.history-dot.canvassed { background: #f59e0b; }
+.history-dot.default { background: #cbd5e1; }
+
 /* History Row */
 .history-row td {
   padding: 0;
@@ -1551,6 +1813,14 @@ onMounted(load)
   letter-spacing: 0.025em;
 }
 
+.identifier-subtext {
+  font-size: 0.65rem;
+  color: #64748b;
+  font-weight: 600;
+  margin-top: 2px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}
+
 .badge-pill.approved {
   background: #ecfdf5;
   color: #059669;
@@ -1560,12 +1830,18 @@ onMounted(load)
   color: #2563eb;
 }
 .badge-pill.received {
-  background: #f5f3ff;
-  color: #7c3aed;
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #ddd6fe;
 }
 .badge-pill.declined {
   background: #fef2f2;
   color: #dc2626;
+}
+
+.badge-pill.canvassed {
+  background: #fffbeb;
+  color: #b45309;
 }
 
 .override-entry {

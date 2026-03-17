@@ -1,9 +1,10 @@
 <script setup>
 import { ref, reactive, watch, computed, onMounted } from 'vue'
-import { createRequisitionDocument, updateRequisition, getDepartments } from '@/services/requisitionService'
+import { createRequisitionDocument, updateRequisition } from '@/services/requisitionService'
 import { getDepartmentManagers } from '@/services/adminService'
 import { REQUISITION_STATUS, USER_ROLE_LABELS } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
+import { useReferenceStore } from '@/stores/reference'
 
 const props = defineProps({
   requisition: {
@@ -15,6 +16,7 @@ const props = defineProps({
 const emit = defineEmits(['created', 'updated', 'cancel'])
 
 const authStore = useAuthStore()
+const referenceStore = useReferenceStore()
 const loading = ref(false)
 const error = ref(null)
 const showSaveConfirm = ref(false)
@@ -60,10 +62,10 @@ watch(
 
 const units = ['pcs', 'dz.', 'set', 'box', 'unit', 'pair', 'roll', 'meter', 'liter', 'kg']
 
-const departments = ref([])
+const departments = computed(() => referenceStore.departmentNames)
 
 onMounted(async () => {
-  departments.value = await getDepartments()
+  referenceStore.fetchDepartments()
 })
 
 function addItem() {

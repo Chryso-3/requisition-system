@@ -6,8 +6,8 @@ import {
   setUserActive,
   updateUserDepartment,
 } from '@/services/adminService'
-import { getDepartments } from '@/services/requisitionService'
 import { USER_ROLES, USER_ROLE_LABELS } from '@/firebase/collections'
+import { useReferenceStore } from '@/stores/reference'
 import {
   Search,
   UserCog,
@@ -25,7 +25,8 @@ const loading = ref(true)
 const searchQuery = ref('')
 const selectedRole = ref('all')
 const savingId = ref(null)
-const departmentsList = ref([])
+const referenceStore = useReferenceStore()
+const departmentsList = computed(() => referenceStore.departmentNames)
 
 const departmentalRoles = [
   USER_ROLES.SECTION_HEAD,
@@ -59,9 +60,9 @@ const filteredUsers = computed(() => {
 async function fetchUsers() {
   loading.value = true
   try {
-    const [usersData, deptsData] = await Promise.all([getAllUsers(), getDepartments()])
+    referenceStore.fetchDepartments() // Trigger fetch if not already done
+    const usersData = await getAllUsers()
     users.value = usersData
-    departmentsList.value = deptsData
   } catch (err) {
     console.error('Error fetching users:', err)
   } finally {

@@ -1473,7 +1473,11 @@ function buildRequisitionsQuery(filters = {}, opts = {}) {
     constraints.push(where('requestedBy.userId', '==', filters.requestedBy))
   }
   if (filters.status) {
-    constraints.push(where('status', '==', filters.status))
+    if (Array.isArray(filters.status)) {
+      constraints.push(where('status', 'in', filters.status))
+    } else {
+      constraints.push(where('status', '==', filters.status))
+    }
   }
   if (filters.purchaseStatus) {
     constraints.push(where('purchaseStatus', '==', filters.purchaseStatus))
@@ -1534,6 +1538,13 @@ export async function getRequisitionCount(filters = {}) {
   if (filters.assignedApproverId) {
     constraints.push(where('assignedApproverId', '==', filters.assignedApproverId))
   }
+
+  // Support for signature field filtering (e.g. "divisionApproved.userId")
+  // and other nested fields
+  Object.keys(filters).forEach(key => {
+    if (['requestedBy', 'status', 'purchaseStatus', 'canvassStatus', 'department', 'assignedApproverId'].includes(key)) return
+    constraints.push(where(key, '==', filters[key]))
+  })
   const q = query(base, ...constraints)
   const snapshot = await getCountFromServer(q)
   return snapshot.data().count
@@ -2921,7 +2932,13 @@ export function subscribeRequisitions(filters, callback, onError, opts = {}) {
       let results = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
       // server-side handled status, purchaseStatus, and singular canvassStatus mostly
       // but keeping safety checks for client-side fallback/arrays
-      if (filters?.status) results = results.filter((r) => r.status === filters.status)
+      if (filters?.status) {
+        if (Array.isArray(filters.status)) {
+          results = results.filter((r) => filters.status.includes(r.status))
+        } else {
+          results = results.filter((r) => r.status === filters.status)
+        }
+      }
       if (filters?.purchaseStatus) {
         results = results.filter(
           (r) => (r.purchaseStatus || PURCHASE_STATUS.PENDING) === filters.purchaseStatus,

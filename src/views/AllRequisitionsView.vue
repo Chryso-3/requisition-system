@@ -30,6 +30,8 @@ const filterStatus = ref('')
 
 // Approver toggle: inbox vs "my history"
 const showAll = ref(false)
+const totalInboxCount = ref(0)
+const totalHistoryCount = ref(0)
 
 const isRequester = computed(() => authStore?.role === USER_ROLES.REQUESTER)
 const isGM = computed(() => authStore?.role === USER_ROLES.GENERAL_MANAGER)
@@ -86,8 +88,7 @@ const filteredRequisitions = computed(() => {
       if (isManager) {
         const deptMatch =
           r.department?.trim().toUpperCase() === authStore.department?.trim().toUpperCase()
-        const assignedToMe = r.assignedApproverId === myId
-        return (approvedByMe || declinedByMe || assignedToMe) && deptMatch
+        return (approvedByMe || declinedByMe) && deptMatch
       }
 
       return matchesAction
@@ -114,50 +115,9 @@ const filteredRequisitions = computed(() => {
 const totalPages = computed(() => Math.ceil(totalItems.value / pageSize.value) || 1)
 const paginatedRequisitions = computed(() => filteredRequisitions.value)
 
-// Inbox/History counts for approvers
-const inboxCount = computed(() => {
-  const w = approverWorkflow.value
-  if (!w) return 0
-  const isManager = [
-    USER_ROLES.SECTION_HEAD,
-    USER_ROLES.DIVISION_HEAD,
-    USER_ROLES.DEPARTMENT_HEAD,
-  ].includes(authStore.role)
-  
-  return requisitions.value.filter((r) => {
-    const statusMatch = r.status === w.canApproveStatus
-    if (!statusMatch) return false
-    if (isManager) {
-      return r.assignedApproverId === authStore.user?.uid
-    }
-    return true
-  }).length
-})
-
-const historyCount = computed(() => {
-  const w = approverWorkflow.value
-  if (!w) return 0
-  const myId = authStore.user?.uid
-  
-  return requisitions.value.filter((r) => {
-    const approvedByMe = r?.[w.field]?.userId && r?.[w.field]?.userId === myId
-    const declinedByMe = r?.rejectedBy?.userId && r?.rejectedBy?.userId === myId
-    const matchesAction = !!(approvedByMe || declinedByMe)
-
-    const isManager = [
-      USER_ROLES.SECTION_HEAD,
-      USER_ROLES.DIVISION_HEAD,
-      USER_ROLES.DEPARTMENT_HEAD,
-    ].includes(authStore.role)
-    
-    if (isManager) {
-      const deptMatch = r.department?.trim().toUpperCase() === authStore.department?.trim().toUpperCase()
-      const assignedToMe = r.assignedApproverId === myId
-      return (approvedByMe || declinedByMe || assignedToMe) && deptMatch
-    }
-    return matchesAction
-  }).length
-})
+// Inbox/History counts from server
+const inboxCount = computed(() => totalInboxCount.value)
+const historyCount = computed(() => totalHistoryCount.value)
 
 const headerSubtitle = computed(() => {
   const w = approverWorkflow.value
@@ -180,13 +140,22 @@ async function refreshData() {
   error.value = null
 
   try {
+    const w = approverWorkflow.value
+    
+    // Build primary filters for the list
     const filters = {}
     if (filterStatus.value) {
       filters.status = filterStatus.value
     }
-    const w = approverWorkflow.value
-    if (w && !showAll.value) {
-      filters.status = w.canApproveStatus
+    
+    if (w) {
+      if (!showAll.value) {
+        // Inbox mode: strictly items pending my approval
+        filters.status = w.canApproveStatus
+      } else {
+        // History mode: processed items (APPROVED or REJECTED)
+        filters.status = [REQUISITION_STATUS.APPROVED, REQUISITION_STATUS.REJECTED]
+      }
     }
 
     // Apply strict department filter to queries if user is a manager
@@ -195,13 +164,41 @@ async function refreshData() {
       USER_ROLES.DIVISION_HEAD,
       USER_ROLES.DEPARTMENT_HEAD,
     ].includes(authStore.role)
+    
     if (isManager && authStore.department) {
       filters.department = authStore.department
       filters.assignedApproverId = authStore.user?.uid
     }
-    // Note: History filter (showAll) usually requires a different query approach if filtering by "approvedByMe".
-    // For now, we'll implement totalItems for the current filter set.
-    totalItems.value = await getRequisitionCount(filters)
+
+    // Update button counts (async) and align totalItems
+    if (w) {
+      const myId = authStore.user?.uid
+      
+      // Inbox Count (Waiting for ME)
+      getRequisitionCount({
+        status: w.canApproveStatus,
+        assignedApproverId: isManager ? myId : undefined,
+        department: isManager ? authStore.department : undefined
+      }).then(c => {
+        totalInboxCount.value = c
+        // If we are currently looking at the Inbox, align totalItems
+        if (!showAll.value) totalItems.value = c
+      })
+
+      // History Count (Processed by ME)
+      Promise.all([
+        getRequisitionCount({ [`${w.field}.userId`]: myId }),
+        getRequisitionCount({ [`rejectedBy.userId`]: myId })
+      ]).then(([appr, rej]) => {
+        const total = appr + rej
+        totalHistoryCount.value = total
+        // If we are currently looking at History, align totalItems
+        if (showAll.value) totalItems.value = total
+      })
+    } else {
+      // Requesters / SysAdmin: just use the general count
+      getRequisitionCount(filters).then(c => totalItems.value = c)
+    }
 
     const startAfter = currentPage.value > 1 ? lastDocs.value[currentPage.value - 2] : null
 

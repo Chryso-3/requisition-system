@@ -32,6 +32,7 @@ const showHowToRead = ref(false)
 const showDownloadConfirmModal = ref(false)
 const deletingLogs = ref(false)
 const downloadLogError = ref(null)
+const isNextLoading = ref(false)
 
 const statusLabel = {
   [REQUISITION_STATUS.DRAFT]: 'Draft',
@@ -208,50 +209,57 @@ const journaledJourneys = computed(() => {
   filteredLogEntries.value.forEach((entry) => {
     const entryDate = entrySignedAt(entry)
     if (!entryDate) return
-    const id = entry.requisitionId
-    const rf = (entry.rfControlNo || '').trim() || id // Prioritize RF Number for visual grouping
-    if (!id && !rf) return
+    
+    // Group strictly by Requisition ID if available, otherwise fallback to RF or a synthetic key
+    const id = entry.requisitionId || entry.rfControlNo || entry.id
+    if (!id) return
 
-    if (!map[rf]) {
-      map[rf] = {
-        segmentId: rf,
-        requisitionId: id, // Initial guess
-        rfControlNo: rf,
+    if (!map[id]) {
+      map[id] = {
+        segmentId: id,
+        requisitionId: entry.requisitionId,
+        rfControlNo: entry.rfControlNo || '—',
         purpose: entry.purpose,
         latestAt: entry.signedAt,
         entries: [],
       }
     }
 
-    const journey = map[rf]
+    const journey = map[id]
     journey.entries.push(entry)
     
-    // If the group didn't have a requisitionId yet (e.g. from an old log),
-    // but this entry has one, update the group's ID.
-    if (!journey.requisitionId && id) {
-      journey.requisitionId = id
+    // If the group didn't have a requisitionId yet but this entry has one, update it
+    if (!journey.requisitionId && entry.requisitionId) {
+      journey.requisitionId = entry.requisitionId
+    }
+    // Update RF number if it was missing
+    if ((!journey.rfControlNo || journey.rfControlNo === '—') && entry.rfControlNo) {
+      journey.rfControlNo = entry.rfControlNo
     }
 
     const d = entrySignedAt(entry)
     const currentLatest = entrySignedAt({ signedAt: journey.latestAt })
     if (d && currentLatest && d > currentLatest) {
       journey.latestAt = entry.signedAt
-      // Update status to reflect the latest action's outcome
       if (entry.statusAfter) {
         journey.status = entry.statusAfter
       }
     }
     
-    // Fallback: if status is still missing, use entry's statusAfter even if not the latest (best effort)
     if (!journey.status && entry.statusAfter) {
       journey.status = entry.statusAfter
     }
   })
 
   // Sort journeys descending by their overall latest action
+  // Tie-breaker: use requisitionId/segmentId for stability across pages
   return Object.values(map).sort((a, b) => {
     const dA = entrySignedAt({ signedAt: a.latestAt })
     const dB = entrySignedAt({ signedAt: b.latestAt })
+    
+    if (dA?.getTime() === dB?.getTime()) {
+      return (b.segmentId || '').localeCompare(a.segmentId || '')
+    }
     return (dB || 0) - (dA || 0)
   })
 })
@@ -270,11 +278,6 @@ function handlePageChange(p) {
   // Smooth scroll back to top of table
   if (tableContainer.value) {
     tableContainer.value.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  // If we are reaching the end of the buffered structured elements, load more from Firestore
-  if (p * pageSize.value > journaledJourneys.value.length - 15 && hasMore.value && !loading.value) {
-    loadMore()
   }
 }
 
@@ -495,12 +498,31 @@ async function load() {
   currentPage.value = 1
   lastDoc.value = null
   hasMore.value = true
+  logEntries.value = []
+  
   try {
-    const logResult = await withTimeout(listAuditLogEntries({ pageSize: PAGE_SIZE }))
-    logEntries.value = logResult.entries.map(mapLogEntry)
-    lastDoc.value = logResult.lastDoc
-    hasMore.value = logResult.hasMore
-    // Show table immediately; fetch purchase details in background (non-blocking)
+    let batchCount = 0
+    // Fetch up to 300 raw logs (6 batches of 50) to build a solid, stable journey count for the UI.
+    // This stops "moving goalposts" during the session.
+    while (hasMore.value && logEntries.value.length < 300 && batchCount < 6) {
+      const result = await withTimeout(
+        listAuditLogEntries({
+          pageSize: PAGE_SIZE,
+          startAfter: lastDoc.value
+        })
+      )
+      
+      const offset = logEntries.value.length
+      const newEntries = result.entries.map((e, i) => mapLogEntry(e, offset + i))
+      
+      logEntries.value = [...logEntries.value, ...newEntries]
+      lastDoc.value = result.lastDoc
+      hasMore.value = result.hasMore
+      batchCount++
+      
+      if (!result.hasMore || result.entries.length === 0) break
+    }
+
     loading.value = false
     updateRequisitionStatusMap()
   } catch (e) {
@@ -510,31 +532,9 @@ async function load() {
 }
 
 async function loadMore() {
-  if (!hasMore.value || loading.value) return
-
-  loading.value = true
-  error.value = null
-  try {
-    const result = await withTimeout(
-      listAuditLogEntries({
-        pageSize: PAGE_SIZE,
-        startAfter: lastDoc.value,
-      }),
-    )
-
-    const offset = logEntries.value.length
-    const newEntries = result.entries.map((e, i) => mapLogEntry(e, offset + i))
-
-    logEntries.value = [...logEntries.value, ...newEntries]
-    lastDoc.value = result.lastDoc
-    hasMore.value = result.hasMore
-    loading.value = false
-    // Fill purchase details in background
-    updateRequisitionStatusMap()
-  } catch (e) {
-    error.value = e.message || 'Failed to load more entries.'
-    loading.value = false
-  }
+  // We've moved to a stable buffer model for UX consistency.
+  // One-time load of 300 is usually plenty for a single audit session.
+  return
 }
 
 function formatDate(val) {
@@ -951,7 +951,7 @@ onMounted(load)
           <div class="panel-title-container">
             <div class="panel-pill">Security Trail</div>
             <h2 class="panel-title-text">
-              Audit Journal <span class="count-chip">{{ totalJourneys }}</span>
+              Audit Journal <span class="count-chip">{{ totalJourneys }}{{ hasMore ? '+' : '' }}</span>
             </h2>
           </div>
 
@@ -1059,7 +1059,11 @@ onMounted(load)
           </div>
           <div v-else-if="logEntries.length === 0" class="empty-state">No transactions yet.</div>
 
-          <div v-else class="table-section" ref="tableContainer">
+          <div v-else class="table-section" :class="{ 'is-loading-discovery': isNextLoading }" ref="tableContainer">
+            <div v-if="isNextLoading" class="discovery-overlay">
+              <div class="spinner spinner-sm"></div>
+              <span>Discovering more records...</span>
+            </div>
             <div class="table-container">
               <table class="data-table">
                 <thead>
@@ -1206,6 +1210,7 @@ onMounted(load)
               :page-size="pageSize"
               :total-items="totalJourneys"
               :loading="loading"
+              :has-more="hasMore"
               @page-change="handlePageChange"
             />
           </div>
@@ -2340,5 +2345,43 @@ onMounted(load)
 .export-btn-purge:hover:not(:disabled) {
   background: #b91c1c;
   color: #fff;
+}
+
+/* Discovery Overlay */
+.table-section {
+  position: relative;
+}
+.discovery-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(2px);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  animation: fade-in 0.2s ease-out;
+}
+.discovery-overlay span {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #0ea5e9;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.spinner-sm {
+  width: 24px;
+  height: 24px;
+  border-width: 2px;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 </style>

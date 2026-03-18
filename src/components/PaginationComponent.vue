@@ -7,6 +7,7 @@ const props = defineProps({
   pageSize: { type: Number, default: 50 },
   totalItems: { type: Number, default: 0 },
   loading: { type: Boolean, default: false },
+  hasMore: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['page-change'])
@@ -15,27 +16,37 @@ const pages = computed(() => {
   const current = props.currentPage
   const total = props.totalPages
   
-  // If 5 or fewer pages, just show all of them
-  if (total <= 5) {
+  if (total <= 1) return [1]
+
+  // If 7 or fewer pages, just show all of them
+  if (total <= 7) {
     return Array.from({ length: total }, (_, i) => i + 1)
   }
 
-  // If current page is at the very beginning
-  if (current <= 2) {
-    return [1, 2, 3, '...', total]
+  const range = []
+  const delta = 2
+
+  range.push(1)
+
+  if (current - delta > 2) {
+    range.push('...')
   }
 
-  // If current page is at the very end
-  if (current >= total - 1) {
-    return [1, '...', total - 2, total - 1, total]
+  for (let i = Math.max(2, current - delta); i <= Math.min(total - 1, current + delta); i++) {
+    range.push(i)
   }
 
-  // If current page is somewhere in the middle
-  return [1, '...', current, '...', total]
+  if (current + delta < total - 1) {
+    range.push('....') // Use a different string for second dots to ensure unique keys
+  }
+
+  range.push(total)
+  return range
 })
 
 function changePage(p) {
-  if (p === '...' || p === props.currentPage || props.loading) return
+  if (typeof p === 'string' && p.includes('.')) return
+  if (p === props.currentPage || props.loading) return
   emit('page-change', p)
 }
 </script>
@@ -45,13 +56,15 @@ function changePage(p) {
     <div class="pagination-info">
       Showing
       <span class="font-bold text-slate-900">{{
-        Math.min((currentPage - 1) * pageSize + 1, totalItems)
+        totalItems === 0 ? 0 : Math.min((currentPage - 1) * pageSize + 1, totalItems)
       }}</span>
       to
       <span class="font-bold text-slate-900">{{
         Math.min(currentPage * pageSize, totalItems)
       }}</span>
-      of <span class="font-bold text-slate-900">{{ totalItems }}</span> entries
+      <template v-if="!hasMore">
+        of <span class="font-bold text-slate-900">{{ totalItems }}</span> entries
+      </template>
     </div>
 
     <div class="pagination-controls">
@@ -76,19 +89,19 @@ function changePage(p) {
       </button>
 
       <button
-        v-for="page in pages"
-        :key="page === '...' ? Math.random() : page"
+        v-for="(page, idx) in pages"
+        :key="typeof page === 'number' ? page : `dots-${idx}`"
         class="page-btn"
-        :class="{ active: page === currentPage, dots: page === '...' }"
-        :disabled="page === '...' || loading"
+        :class="{ active: page === currentPage, dots: typeof page === 'string' && page.includes('.') }"
+        :disabled="(typeof page === 'string' && page.includes('.')) || loading"
         @click="changePage(page)"
       >
-        {{ page }}
+        {{ typeof page === 'string' && page.includes('.') ? '...' : page }}
       </button>
 
       <button
         class="page-btn next"
-        :disabled="currentPage === totalPages || loading"
+        :disabled="(currentPage === totalPages && !hasMore) || loading"
         @click="changePage(currentPage + 1)"
       >
         <svg

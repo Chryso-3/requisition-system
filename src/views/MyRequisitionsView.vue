@@ -560,15 +560,7 @@ onUnmounted(() => {
                     <td class="current-step-cell">{{ getCurrentStep(r) }}</td>
                     <td class="text-center">{{ (r.items || []).length }}</td>
                     <td class="workflow-cell action-buttons">
-                      <div class="d-flex gap-2 justify-content-center">
-                        <button 
-                          v-if="r.status === REQUISITION_STATUS.DRAFT"
-                          type="button" 
-                          class="btn-workflow edit-btn" 
-                          @click.stop="$router.push(`/requisitions/${r.id}/edit`)"
-                        >
-                          Edit
-                        </button>
+                      <div class="d-flex justify-content-center">
                         <button type="button" class="btn-workflow" @click.stop="goToDetail(r.id)">
                           Workflow
                         </button>

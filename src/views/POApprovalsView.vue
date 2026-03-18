@@ -51,11 +51,11 @@ const pendingStatusForRole = computed(() => {
 
 const pageTitle = computed(() => {
   const r = authStore?.role
-  if (r === USER_ROLES.BUDGET_OFFICER) return '2. PO Approval (Budget/Funds)'
-  if (r === USER_ROLES.INTERNAL_AUDITOR) return '2. PO Approval (Pre-Audit)'
-  if (r === USER_ROLES.GENERAL_MANAGER) return '2. PO Approval (Final)'
-  if (r === USER_ROLES.PURCHASER) return '2. Pending PO Approvals'
-  return '2. PO Approval'
+  if (r === USER_ROLES.BUDGET_OFFICER) return ' PO Approval (Budget/Funds)'
+  if (r === USER_ROLES.INTERNAL_AUDITOR) return 'PO Approval (Pre-Audit)'
+  if (r === USER_ROLES.GENERAL_MANAGER) return 'PO Approval (Final)'
+  if (r === USER_ROLES.PURCHASER) return 'Pending PO Approvals'
+  return 'PO Approval'
 })
 
 const pageSubtitle = computed(() => {

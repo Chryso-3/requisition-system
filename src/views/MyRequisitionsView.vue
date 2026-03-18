@@ -136,7 +136,7 @@ const stats = computed(() => {
 
     return {
       total: liveTotalCount.value || s.total || 0,
-      draft: s.byStatus?.[REQUISITION_STATUS.DRAFT] || 0,
+      draft: userStats.value?.draft || 0, // Fallback to personal drafts since global stats exclude them
       pending: pendingTotal,
       approved: s.byStatus?.[REQUISITION_STATUS.APPROVED] || 0,
     }
@@ -154,13 +154,13 @@ const stats = computed(() => {
 async function refreshUserStats() {
   if (!authStore?.user) return
   try {
+    // Everyone fetches their personal stats to get their 'Draft' count correctly
+    const data = await getUserRequisitionStats(authStore.user.uid)
+    if (data) userStats.value = data
+
     if (isGlobalRole.value) {
       // Fetch live total count for global roles to ensure it matches the live table
       liveTotalCount.value = await getRequisitionCount({})
-    } else {
-      // Everyone except GM/Admin sees their OWN stats
-      const data = await getUserRequisitionStats(authStore.user.uid)
-      if (data) userStats.value = data
     }
   } catch (e) {
     console.warn('Failed to fetch user stats:', e)
@@ -318,10 +318,9 @@ watch([filterStatus, isGlobalRole], (newVal, oldVal) => {
       unsubscribeStats = subscribeAnalyticsSummary((data) => {
         globalStats.value = data
       })
-    } else {
-      // Switched away from GM, refresh user stats
-      refreshUserStats()
     }
+    // Always refresh user stats so even GMs have their Drafts count
+    refreshUserStats()
   }
 })
 

@@ -337,36 +337,7 @@ watch(
             </span>
             <span class="nav-text">PO Approvals</span>
           </router-link>
-          <router-link
-            v-if="isGeneralManager"
-            to="/my-requisitions"
-            class="nav-item"
-            active-class="active"
-          >
-            <span class="nav-icon">
-              <!-- Realistic Blue Folder Icon -->
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  d="M4 6C4 4.89543 4.89543 4 6 4H10L12 6H18C19.1046 6 20 6.89543 20 8V18C20 19.1046 19.1046 20 18 20H6C4.89543 20 4 19.1046 4 18V6Z"
-                  fill="#3B82F6"
-                />
-                <path
-                  d="M4 8H20V18C20 19.1046 19.1046 20 18 20H6C4.89543 20 4 19.1046 4 18V8Z"
-                  fill="#60A5FA"
-                />
-                <path d="M7 10H17V12H7V10Z" fill="white" fill-opacity="0.4" />
-                <path d="M7 14H13V16H7V14Z" fill="white" fill-opacity="0.4" />
-                <path opacity="0.1" d="M4 8H20V9H4V8Z" fill="black" />
-              </svg>
-            </span>
-            <span>My Requisitions</span>
-          </router-link>
+
           <router-link v-if="canViewLogs" to="/audit-log" class="nav-item" active-class="active">
             <span class="nav-icon">
               <!-- Realistic Slate/Blue Clock Icon -->

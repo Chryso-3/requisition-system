@@ -81,7 +81,19 @@ const router = createRouter({
           path: 'requisitions/:id/edit',
           name: 'edit-requisition',
           component: () => import('@/views/EditRequisitionView.vue'),
-          meta: { roles: [USER_ROLES.REQUESTER, USER_ROLES.SUPER_ADMIN] },
+          meta: { 
+            roles: [
+              USER_ROLES.REQUESTER,
+              USER_ROLES.SECTION_HEAD,
+              USER_ROLES.DIVISION_HEAD,
+              USER_ROLES.DEPARTMENT_HEAD,
+              USER_ROLES.WAREHOUSE_HEAD,
+              USER_ROLES.BUDGET_OFFICER,
+              USER_ROLES.INTERNAL_AUDITOR,
+              USER_ROLES.GENERAL_MANAGER,
+              USER_ROLES.SUPER_ADMIN
+            ] 
+          },
         },
         {
           path: 'pending-approvals',

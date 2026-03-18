@@ -234,15 +234,33 @@ function updateData() {
     }
   })
 
+  // ── 4.5. Dynamic Live Aging for Bottlenecks ──────────────────────────────
+  // The analytics summary document was updated at `s.lastUpdated`.
+  // To show live aging, we add the elapsed time since `lastUpdated` to all active items.
+  const lastUpdated = s.lastUpdated?.toDate
+    ? s.lastUpdated.toDate()
+    : s.lastUpdated
+      ? new Date(s.lastUpdated)
+      : now
+  const elapsedMs = Math.max(0, now - lastUpdated)
+
   // Bottlenecks: MAP from full ALL_STAGES list (guarantees Req + PO always render)
   const bottlenecks = ALL_STAGES.map((stage) => {
-    const dur = durSrc[stage] || zeroDur()
+    // For historical averages, we use the date-preset filtered durations (durSrc)
+    const durFiltered = durSrc[stage] || zeroDur()
+    // For "Current Active Aging", we ALWAYS use the global snapshot (s.durations)
+    // because an item currently stuck in the pipeline is stuck regardless of when it was created.
+    const globalDur = s.durations?.[stage] || zeroDur()
+
+    const activeCount = globalDur.activeCount || 0
+    // Live total MS = snapshot total MS + (number of active items * time elapsed since snapshot)
+    const liveActiveTotalMs = (globalDur.activeTotalMs || 0) + activeCount * elapsedMs
+
     return {
       stage,
-      avgDays: dur.count > 0 ? (dur.totalMs / dur.count / 86400000).toFixed(2) : 0,
-      activeCount: dur.activeCount || 0,
-      activeAvgDays:
-        dur.activeCount > 0 ? (dur.activeTotalMs / dur.activeCount / 86400000).toFixed(2) : 0,
+      avgDays: durFiltered.count > 0 ? (durFiltered.totalMs / durFiltered.count / 86400000).toFixed(2) : 0,
+      activeCount,
+      activeAvgDays: activeCount > 0 ? (liveActiveTotalMs / activeCount / 86400000).toFixed(2) : 0,
     }
   })
 

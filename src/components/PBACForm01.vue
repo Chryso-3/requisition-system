@@ -97,7 +97,7 @@ const isoCertSrc = computed(() => {
           <th style="width: 50px">ITEM</th>
           <th style="width: 60px">RF#</th>
           <th style="width: 60px">QTY</th>
-          <th style="width: 70px">UNIT</th>
+          <th style="width: 120px">UNIT</th>
           <th>PARTICULARS</th>
           <th style="width: 100px">UNIT PRICE</th>
           <th style="width: 100px">BRAND</th>
@@ -110,7 +110,7 @@ const isoCertSrc = computed(() => {
           <td class="text-center">{{ requisition.rfControlNo || '—' }}</td>
           <td class="text-center">{{ item.quantity }}</td>
           <td class="text-center">{{ item.unit || '—' }}</td>
-          <td>{{ item.description || '—' }}</td>
+          <td style="overflow-wrap: anywhere; word-break: break-word;">{{ item.description || '—' }}</td>
           <td class="empty-cell"></td>
           <td class="empty-cell"></td>
           <td class="empty-cell"></td>

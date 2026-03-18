@@ -60,7 +60,26 @@ watch(
   { immediate: true },
 )
 
-const units = ['pcs', 'dz.', 'set', 'box', 'unit', 'pair', 'roll', 'meter', 'liter', 'kg']
+const units = [
+  'pcs',
+  'box',
+  'ream',
+  'set',
+  'unit',
+  'lot',
+  'pair',
+  'roll',
+  'meter',
+  'liter',
+  'kg',
+  'can',
+  'bag',
+  'bottle',
+  'bundle',
+  'dz.',
+  'gal',
+  'mtrs',
+]
 
 const departments = computed(() => referenceStore.departmentNames)
 
@@ -282,33 +301,43 @@ async function onSubmit() {
         <table class="items-table">
           <thead>
             <tr>
-              <th>QTY</th>
-              <th>Unit</th>
-              <th>Description / Specifications</th>
-              <th>Remarks</th>
-              <th></th>
+              <th class="col-qty">QTY</th>
+              <th class="col-unit">Unit</th>
+              <th class="col-desc">Description / Specifications</th>
+              <th class="col-remarks">Remarks</th>
+              <th class="col-action"></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(item, idx) in form.items" :key="idx">
-              <td>
+              <td class="col-qty">
                 <input v-model.number="item.quantity" type="number" min="1" class="qty-input" />
               </td>
-              <td>
-                <select v-model="item.unit">
-                  <option v-for="u in units" :key="u" :value="u">{{ u }}</option>
-                </select>
+              <td class="col-unit">
+                <input
+                  v-model="item.unit"
+                  list="unit-suggestions"
+                  placeholder="pcs"
+                  class="unit-input"
+                />
               </td>
-              <td>
+              <td class="col-desc">
                 <input v-model="item.description" type="text" placeholder="e.g. WIRELESS MOUSE" />
               </td>
-              <td><input v-model="item.remarks" type="text" placeholder="—" /></td>
-              <td>
+              <td class="col-remarks">
+                <input v-model="item.remarks" type="text" placeholder="—" />
+              </td>
+              <td class="col-action">
                 <button type="button" class="btn-remove" @click="removeItem(idx)">Remove</button>
               </td>
             </tr>
           </tbody>
         </table>
+
+        <!-- Reusable datalist for units -->
+        <datalist id="unit-suggestions">
+          <option v-for="u in units" :key="u" :value="u" />
+        </datalist>
       </div>
     </div>
 
@@ -533,8 +562,22 @@ async function onSubmit() {
   border-radius: 6px;
   font-size: 0.875rem;
 }
-.qty-input {
+.items-table .col-qty {
   width: 4.5rem;
+  text-align: center;
+}
+.items-table .col-unit {
+  width: 8.5rem;
+}
+.items-table .col-desc {
+  min-width: 15rem;
+}
+.items-table .col-remarks {
+  width: 10rem;
+}
+.items-table .col-action {
+  width: 5.5rem;
+  text-align: center;
 }
 
 .btn-remove {

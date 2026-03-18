@@ -153,13 +153,13 @@ const showProcurementDashboard = computed(() => {
 
 const canViewCanvass = computed(() => {
   const r = requisition.value
-  if (!r) return false
+  if (!r || r.status !== REQUISITION_STATUS.APPROVED) return false
   return isProcurementStaff.value || isPOApprover.value || isAdmin.value || isRequestor.value
 })
 
 const canViewPO = computed(() => {
   const r = requisition.value
-  if (!r) return false
+  if (!r || r.status !== REQUISITION_STATUS.APPROVED) return false
   // Procurement, Approvers and Admins can always see it if it exists
   if (isProcurementStaff.value || isPOApprover.value || isAdmin.value) return !!r.poStatus
   // Requestors can only see it when fully approved
@@ -205,6 +205,20 @@ const unifiedProcurementStage = computed(() => {
     return { label: 'Step 2: PO Issued (Pending Approval)', class: 'bac-processing' }
   }
   return { label: 'Step 1: Needs Canvassing', class: 'pending' }
+})
+
+/**
+ * Smart Break Logic:
+ * If the form is "long" (many items or long purpose), the 2nd copy
+ * should always start on a new page to avoid awkward splitting.
+ */
+const isLongForm = computed(() => {
+  const r = requisition.value
+  if (!r) return false
+  const itemsCount = (r.items || []).length
+  const purposeLength = (r.purpose || '').length
+  // Threshold: > 5 items or significant purpose text
+  return itemsCount > 5 || purposeLength > 150
 })
 
 const computedPoTotalAmount = computed(() => {
@@ -791,9 +805,7 @@ onUnmounted(() => {
 
               <div class="workflow-actions">
                 <button
-                  v-if="
-                    canvassStatusDisplay === CANVASS_STATUS.PENDING && isPurchaser
-                  "
+                  v-if="canvassStatusDisplay === CANVASS_STATUS.PENDING && isPurchaser"
                   type="button"
                   class="btn-dashboard-action primary"
                   :disabled="purchaseActionLoading"
@@ -815,10 +827,7 @@ onUnmounted(() => {
                   Mark as Ordered
                 </button>
                 <button
-                  v-else-if="
-                    purchaseStatusDisplay === PURCHASE_STATUS.ORDERED &&
-                    isPurchaser
-                  "
+                  v-else-if="purchaseStatusDisplay === PURCHASE_STATUS.ORDERED && isPurchaser"
                   type="button"
                   class="btn-dashboard-action primary"
                   :disabled="purchaseActionLoading"
@@ -865,10 +874,7 @@ onUnmounted(() => {
           <!-- Documents Tab Content -->
           <template v-if="showProcurementDashboard && activeTab === 'documents'">
             <!-- Document 1: Purchase Order view -->
-            <div
-              v-if="printMode === 'purchase-order' && canViewPO"
-              class="print-form-container"
-            >
+            <div v-if="printMode === 'purchase-order' && canViewPO" class="print-form-container">
               <PurchaseOrder :requisition="requisition" :signatures="sigMap" />
             </div>
 
@@ -882,277 +888,291 @@ onUnmounted(() => {
 
             <!-- Document 3: Default Requisition Form (FM-PUR-05) view -->
             <div v-else class="form-document form-container">
-              <div class="print-page">
-                <!-- Unified Form Table (Header + Items) -->
-                <table class="form-unified-table">
-                  <!-- Header Section -->
-                  <thead>
-                    <tr>
-                      <td colspan="6" class="header-cell">
-                        <div class="header-content">
-                          <div class="logo-box">
-                            <img class="logo" src="@/assets/logos.png" alt="Leyeco III" />
+              <div v-for="i in 2" :key="i" class="print-page-wrapper" :class="{ 'print-only-copy': i === 2 }">
+                <div class="print-page">
+                  <div class="copy-label no-print-screen">COPY {{ i }}</div>
+                  <!-- Unified Form Table (Header + Items) -->
+                  <table class="form-unified-table">
+                    <!-- Header Section -->
+                    <thead>
+                      <tr>
+                        <td colspan="6" class="header-cell">
+                          <div class="header-content">
+                            <div class="logo-box">
+                              <img class="logo" src="@/assets/logos.png" alt="Leyeco III" />
+                            </div>
+                            <div class="header-text-box">
+                              <h2 class="company-name">LEYTE III ELECTRIC COOPERATIVE INC.</h2>
+                              <h1 class="form-title">REQUISITION FORM</h1>
+                            </div>
                           </div>
-                          <div class="header-text-box">
-                            <h2 class="company-name">LEYTE III ELECTRIC COOPERATIVE INC.</h2>
-                            <h1 class="form-title">REQUISITION FORM</h1>
+                        </td>
+                      </tr>
+                      <!-- Info Section: Date (Left) and RF Control No (Right) -->
+                      <tr>
+                        <td colspan="3" class="info-cell">
+                          <span class="info-label">Date:</span>
+                          <span class="info-val">{{ formatDate(requisition.date) }}</span>
+                        </td>
+                        <td colspan="3" class="info-cell" style="text-align: right">
+                          <span class="info-label">RF Control No.:</span>
+                          <span class="info-val">{{ requisition.rfControlNo || '—' }}</span>
+                        </td>
+                      </tr>
+                      <!-- Department Section -->
+                      <tr>
+                        <td colspan="6" class="dept-cell">
+                          <span class="info-label">Department:</span>
+                          <span class="info-val">{{ requisition.department || '—' }}</span>
+                        </td>
+                      </tr>
+                      <!-- Item Headers -->
+                      <tr class="item-header-row">
+                        <th style="width: 50px">QTY</th>
+                        <th style="width: 80px">Unit</th>
+                        <th>Description/Specifications</th>
+                        <th style="width: 100px">Warehouse Inventory</th>
+                        <th style="width: 120px">Balance for Purchase</th>
+                        <th style="width: 150px">Remarks</th>
+                      </tr>
+                    </thead>
+                    <!-- Item Body -->
+                    <tbody>
+                      <tr v-for="(item, idx) in requisition.items || []" :key="idx">
+                        <td class="item-cell">{{ item.quantity }}</td>
+                        <td class="item-cell">{{ item.unit || '—' }}</td>
+                        <td class="item-cell">{{ item.description || '—' }}</td>
+                        <td class="item-cell"></td>
+                        <td class="item-cell"></td>
+                        <td class="item-cell">{{ item.remarks || '—' }}</td>
+                      </tr>
+                      <!-- Empty rows to maintain layout -->
+                      <tr
+                        v-for="n in Math.max(0, 2 - (requisition.items?.length || 0))"
+                        :key="'empty-' + n"
+                      >
+                        <td class="item-cell">&nbsp;</td>
+                        <td class="item-cell"></td>
+                        <td class="item-cell"></td>
+                        <td class="item-cell"></td>
+                        <td class="item-cell"></td>
+                        <td class="item-cell"></td>
+                      </tr>
+                      <!-- Purpose Row -->
+                      <tr class="purpose-row">
+                        <td colspan="6">
+                          <div class="purpose-content">
+                            <strong>Purpose:</strong>
+                            <span class="purpose-val">{{ requisition.purpose || '—' }}</span>
                           </div>
-                        </div>
-                      </td>
-                    </tr>
-                    <!-- Info Section: Date (Left) and RF Control No (Right) -->
-                    <tr>
-                      <td colspan="3" class="info-cell">
-                        <span class="info-label">Date:</span>
-                        <span class="info-val">{{ formatDate(requisition.date) }}</span>
-                      </td>
-                      <td colspan="3" class="info-cell" style="text-align: right">
-                        <span class="info-label">RF Control No.:</span>
-                        <span class="info-val">{{ requisition.rfControlNo || '—' }}</span>
-                      </td>
-                    </tr>
-                    <!-- Department Section -->
-                    <tr>
-                      <td colspan="6" class="dept-cell">
-                        <span class="info-label">Department:</span>
-                        <span class="info-val">{{ requisition.department || '—' }}</span>
-                      </td>
-                    </tr>
-                    <!-- Item Headers -->
-                    <tr class="item-header-row">
-                      <th style="width: 50px">QTY</th>
-                      <th style="width: 80px">Unit</th>
-                      <th>Description/Specifications</th>
-                      <th style="width: 100px">Warehouse Inventory</th>
-                      <th style="width: 120px">Balance for Purchase</th>
-                      <th style="width: 150px">Remarks</th>
-                    </tr>
-                  </thead>
-                  <!-- Item Body -->
-                  <tbody>
-                    <tr v-for="(item, idx) in requisition.items || []" :key="idx">
-                      <td class="item-cell">{{ item.quantity }}</td>
-                      <td class="item-cell">{{ item.unit || '—' }}</td>
-                      <td class="item-cell">{{ item.description || '—' }}</td>
-                      <td class="item-cell"></td>
-                      <td class="item-cell"></td>
-                      <td class="item-cell">{{ item.remarks || '—' }}</td>
-                    </tr>
-                    <!-- Empty rows to maintain layout -->
-                    <tr
-                      v-for="n in Math.max(0, 2 - (requisition.items?.length || 0))"
-                      :key="'empty-' + n"
-                    >
-                      <td class="item-cell">&nbsp;</td>
-                      <td class="item-cell"></td>
-                      <td class="item-cell"></td>
-                      <td class="item-cell"></td>
-                      <td class="item-cell"></td>
-                      <td class="item-cell"></td>
-                    </tr>
-                    <!-- Purpose Row -->
-                    <tr class="purpose-row">
-                      <td colspan="6">
-                        <div class="purpose-content">
-                          <strong>Purpose:</strong>
-                          <span class="purpose-val">{{ requisition.purpose || '—' }}</span>
-                        </div>
-                      </td>
-                    </tr>
-                    <!-- Signature Rows -->
-                    <tr class="sig-row">
-                      <td colspan="2">
-                        <div class="sig-label">Requested by:</div>
-                        <div class="sig-name-overlay">
-                          <span class="sig-name">{{ requisition.requestedBy?.name || '—' }}</span>
-                          <div
-                            v-if="sigSrcFor('requestedBy', requisition.requestedBy)"
-                            class="sig-image-wrap"
-                          >
-                            <img
-                              :src="sigSrcFor('requestedBy', requisition.requestedBy)"
-                              alt="Requestor signature"
-                              class="sig-image"
-                            />
+                        </td>
+                      </tr>
+                      <!-- Signature Rows -->
+                      <tr class="sig-row">
+                        <td colspan="2">
+                          <div class="sig-label">Requested by:</div>
+                          <div class="sig-name-overlay">
+                            <span class="sig-name">{{ requisition.requestedBy?.name || '—' }}</span>
+                            <div
+                              v-if="sigSrcFor('requestedBy', requisition.requestedBy)"
+                              class="sig-image-wrap"
+                            >
+                              <img
+                                :src="sigSrcFor('requestedBy', requisition.requestedBy)"
+                                alt="Requestor signature"
+                                class="sig-image"
+                              />
+                            </div>
                           </div>
-                        </div>
-                        <div class="sig-line"></div>
-                        <div class="sig-sub">Name & Signature</div>
-                      </td>
+                          <div class="sig-line"></div>
+                          <div class="sig-sub">Name & Signature</div>
+                        </td>
 
-                      <td colspan="2">
-                        <div class="sig-label">Recommending Approval:</div>
-                        <div class="sig-name-overlay">
-                          <span
-                            class="sig-name"
-                            :class="{
-                              'override-name': sigMap['recommendingApproval']?.isOverride,
-                              'assigned-name':
-                                !requisition.recommendingApproval?.name &&
-                                requisition.assignedApproverName,
-                            }"
-                          >
-                            {{
-                              requisition.recommendingApproval?.name ||
-                              requisition.assignedApproverName ||
-                              '—'
-                            }}
-                          </span>
-                          <div
-                            v-if="sigMap['recommendingApproval']?.isOverride"
-                            class="admin-override-seal"
-                          >
-                            ADMIN OVERRIDE
-                          </div>
-                          <div
-                            v-else-if="
-                              sigSrcFor('recommendingApproval', requisition.recommendingApproval)
-                            "
-                            class="sig-image-wrap"
-                          >
-                            <img
-                              :src="
+                        <td colspan="2">
+                          <div class="sig-label">Recommending Approval:</div>
+                          <div class="sig-name-overlay">
+                            <span
+                              class="sig-name"
+                              :class="{
+                                'override-name': sigMap['recommendingApproval']?.isOverride,
+                                'assigned-name':
+                                  !requisition.recommendingApproval?.name &&
+                                  requisition.assignedApproverName,
+                              }"
+                            >
+                              {{
+                                requisition.recommendingApproval?.name ||
+                                requisition.assignedApproverName ||
+                                '—'
+                              }}
+                            </span>
+                            <div
+                              v-if="sigMap['recommendingApproval']?.isOverride"
+                              class="admin-override-seal"
+                            >
+                              ADMIN OVERRIDE
+                            </div>
+                            <div
+                              v-else-if="
                                 sigSrcFor('recommendingApproval', requisition.recommendingApproval)
                               "
-                              alt="Signature"
-                              class="sig-image"
-                            />
+                              class="sig-image-wrap"
+                            >
+                              <img
+                                :src="
+                                  sigSrcFor(
+                                    'recommendingApproval',
+                                    requisition.recommendingApproval,
+                                  )
+                                "
+                                alt="Signature"
+                                class="sig-image"
+                              />
+                            </div>
                           </div>
-                        </div>
-                        <div class="sig-line"></div>
-                        <div class="sig-sub">Section Head / Div. Head / Department Head</div>
-                      </td>
+                          <div class="sig-line"></div>
+                          <div class="sig-sub">Section Head / Div. Head / Department Head</div>
+                        </td>
 
-                      <td colspan="2">
-                        <div class="sig-label">Inventory Checked:</div>
-                        <div class="sig-name-overlay">
-                          <span
-                            class="sig-name"
-                            :class="{ 'override-name': sigMap['inventoryChecked']?.isOverride }"
-                          >
-                            {{ requisition.inventoryChecked?.name || '—' }}
-                          </span>
-                          <div
-                            v-if="sigMap['inventoryChecked']?.isOverride"
-                            class="admin-override-seal"
-                          >
-                            ADMIN OVERRIDE
+                        <td colspan="2">
+                          <div class="sig-label">Inventory Checked:</div>
+                          <div class="sig-name-overlay">
+                            <span
+                              class="sig-name"
+                              :class="{ 'override-name': sigMap['inventoryChecked']?.isOverride }"
+                            >
+                              {{ requisition.inventoryChecked?.name || '—' }}
+                            </span>
+                            <div
+                              v-if="sigMap['inventoryChecked']?.isOverride"
+                              class="admin-override-seal"
+                            >
+                              ADMIN OVERRIDE
+                            </div>
+                            <div
+                              v-else-if="
+                                sigSrcFor('inventoryChecked', requisition.inventoryChecked)
+                              "
+                              class="sig-image-wrap"
+                            >
+                              <img
+                                :src="sigSrcFor('inventoryChecked', requisition.inventoryChecked)"
+                                alt="Signature"
+                                class="sig-image"
+                              />
+                            </div>
                           </div>
-                          <div
-                            v-else-if="sigSrcFor('inventoryChecked', requisition.inventoryChecked)"
-                            class="sig-image-wrap"
-                          >
-                            <img
-                              :src="sigSrcFor('inventoryChecked', requisition.inventoryChecked)"
-                              alt="Signature"
-                              class="sig-image"
-                            />
-                          </div>
-                        </div>
-                        <div class="sig-line"></div>
-                        <div class="sig-sub">Warehouse Section Head</div>
-                      </td>
-                    </tr>
+                          <div class="sig-line"></div>
+                          <div class="sig-sub">Warehouse Section Head</div>
+                        </td>
+                      </tr>
 
-                    <tr class="sig-row">
-                      <td colspan="2">
-                        <div class="sig-label">Budget Approved:</div>
-                        <div class="sig-name-overlay">
-                          <span
-                            class="sig-name"
-                            :class="{ 'override-name': sigMap['budgetApproved']?.isOverride }"
-                          >
-                            {{ requisition.budgetApproved?.name || '—' }}
-                          </span>
-                          <div
-                            v-if="sigMap['budgetApproved']?.isOverride"
-                            class="admin-override-seal"
-                          >
-                            ADMIN OVERRIDE
+                      <tr class="sig-row">
+                        <td colspan="2">
+                          <div class="sig-label">Budget Approved:</div>
+                          <div class="sig-name-overlay">
+                            <span
+                              class="sig-name"
+                              :class="{ 'override-name': sigMap['budgetApproved']?.isOverride }"
+                            >
+                              {{ requisition.budgetApproved?.name || '—' }}
+                            </span>
+                            <div
+                              v-if="sigMap['budgetApproved']?.isOverride"
+                              class="admin-override-seal"
+                            >
+                              ADMIN OVERRIDE
+                            </div>
+                            <div
+                              v-else-if="sigSrcFor('budgetApproved', requisition.budgetApproved)"
+                              class="sig-image-wrap"
+                            >
+                              <img
+                                :src="sigSrcFor('budgetApproved', requisition.budgetApproved)"
+                                alt="Signature"
+                                class="sig-image"
+                              />
+                            </div>
                           </div>
-                          <div
-                            v-else-if="sigSrcFor('budgetApproved', requisition.budgetApproved)"
-                            class="sig-image-wrap"
-                          >
-                            <img
-                              :src="sigSrcFor('budgetApproved', requisition.budgetApproved)"
-                              alt="Signature"
-                              class="sig-image"
-                            />
-                          </div>
-                        </div>
-                        <div class="sig-line"></div>
-                        <div class="sig-sub">Acctg. Div. Supervisor / Budget Officer</div>
-                      </td>
+                          <div class="sig-line"></div>
+                          <div class="sig-sub">Acctg. Div. Supervisor / Budget Officer</div>
+                        </td>
 
-                      <td colspan="2">
-                        <div class="sig-label">Checked by:</div>
-                        <div class="sig-name-overlay">
-                          <span
-                            class="sig-name"
-                            :class="{ 'override-name': sigMap['checkedBy']?.isOverride }"
-                          >
-                            {{ requisition.checkedBy?.name || '—' }}
-                          </span>
-                          <div v-if="sigMap['checkedBy']?.isOverride" class="admin-override-seal">
-                            ADMIN OVERRIDE
+                        <td colspan="2">
+                          <div class="sig-label">Checked by:</div>
+                          <div class="sig-name-overlay">
+                            <span
+                              class="sig-name"
+                              :class="{ 'override-name': sigMap['checkedBy']?.isOverride }"
+                            >
+                              {{ requisition.checkedBy?.name || '—' }}
+                            </span>
+                            <div v-if="sigMap['checkedBy']?.isOverride" class="admin-override-seal">
+                              ADMIN OVERRIDE
+                            </div>
+                            <div
+                              v-else-if="sigSrcFor('checkedBy', requisition.checkedBy)"
+                              class="sig-image-wrap"
+                            >
+                              <img
+                                :src="sigSrcFor('checkedBy', requisition.checkedBy)"
+                                alt="Signature"
+                                class="sig-image"
+                              />
+                            </div>
                           </div>
-                          <div
-                            v-else-if="sigSrcFor('checkedBy', requisition.checkedBy)"
-                            class="sig-image-wrap"
-                          >
-                            <img
-                              :src="sigSrcFor('checkedBy', requisition.checkedBy)"
-                              alt="Signature"
-                              class="sig-image"
-                            />
-                          </div>
-                        </div>
-                        <div class="sig-line"></div>
-                        <div class="sig-sub">Internal Auditor</div>
-                      </td>
+                          <div class="sig-line"></div>
+                          <div class="sig-sub">Internal Auditor</div>
+                        </td>
 
-                      <td colspan="2">
-                        <div class="sig-label">Approved By:</div>
-                        <div class="sig-name-overlay">
-                          <span
-                            class="sig-name"
-                            :class="{ 'override-name': sigMap['approvedBy']?.isOverride }"
-                          >
-                            {{ requisition.approvedBy?.name || '—' }}
-                          </span>
-                          <div v-if="sigMap['approvedBy']?.isOverride" class="admin-override-seal">
-                            ADMIN OVERRIDE
+                        <td colspan="2">
+                          <div class="sig-label">Approved By:</div>
+                          <div class="sig-name-overlay">
+                            <span
+                              class="sig-name"
+                              :class="{ 'override-name': sigMap['approvedBy']?.isOverride }"
+                            >
+                              {{ requisition.approvedBy?.name || '—' }}
+                            </span>
+                            <div
+                              v-if="sigMap['approvedBy']?.isOverride"
+                              class="admin-override-seal"
+                            >
+                              ADMIN OVERRIDE
+                            </div>
+                            <div
+                              v-else-if="sigSrcFor('approvedBy', requisition.approvedBy)"
+                              class="sig-image-wrap"
+                            >
+                              <img
+                                :src="sigSrcFor('approvedBy', requisition.approvedBy)"
+                                alt="Signature"
+                                class="sig-image"
+                              />
+                            </div>
                           </div>
-                          <div
-                            v-else-if="sigSrcFor('approvedBy', requisition.approvedBy)"
-                            class="sig-image-wrap"
-                          >
-                            <img
-                              :src="sigSrcFor('approvedBy', requisition.approvedBy)"
-                              alt="Signature"
-                              class="sig-image"
-                            />
-                          </div>
-                        </div>
-                        <div class="sig-line"></div>
-                        <div class="sig-sub">General Manager</div>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                          <div class="sig-line"></div>
+                          <div class="sig-sub">General Manager</div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
 
-                <div class="footer">
-                  <div class="footer-item" style="font-style: italic; color: #555; font-size: 10px">
-                    Generated: {{ new Date().toLocaleString() }}
+                  <div class="footer">
+                    <div
+                      class="footer-item"
+                      style="font-style: italic; color: #555; font-size: 10px"
+                    >
+                      Generated: {{ new Date().toLocaleString() }}
+                    </div>
                   </div>
-                  <div class="footer-item" style="font-size: 10px">Page 1 of 1</div>
                 </div>
+                <!-- Separator between copies (only if they are on the same page) -->
+                <div v-if="i === 1 && !isLongForm" class="print-separator no-print-screen"></div>
               </div>
             </div>
           </template>
 
-          <!-- Overview Tab or Standard Details View -->
           <template v-else-if="!showProcurementDashboard || activeTab === 'overview'">
             <div class="screen-view">
               <header class="detail-header">
@@ -1371,82 +1391,78 @@ onUnmounted(() => {
               </section>
             </div>
           </template>
+        </div>
 
-          <!-- Actions: sticky bar so button is always visible and clickable -->
-          <div
-            class="detail-actions no-print"
-            v-if="canEditDraft || showApproveDecline || showProcurementDashboard"
-          >
-            <template v-if="canEditDraft">
-              <button
-                type="button"
-                class="btn btn-danger"
-                :disabled="actionLoading"
-                @click="openConfirmDiscard"
-                style="display: flex; align-items: center; gap: 8px"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M3 6h18"></path>
-                  <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
-                  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
-                </svg>
-                Discard Draft
-              </button>
-              <button
-                type="button"
-                class="btn btn-secondary"
-                :disabled="actionLoading"
-                @click="openConfirmEdit"
-              >
-                Edit Draft
-              </button>
-              <button
-                type="button"
-                class="btn btn-primary"
-                :disabled="actionLoading"
-                @click="openConfirmSubmit"
-              >
-                Submit for Approval
-              </button>
-            </template>
-            <template v-else-if="showApproveDecline">
-              <button
-                type="button"
-                class="btn btn-primary"
-                :disabled="actionLoading"
-                @click="openConfirmApprove"
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                class="btn btn-danger"
-                :disabled="actionLoading"
-                @click="openDeclineModal"
-              >
-                Decline
-              </button>
-            </template>
-            <template
-              v-else-if="
-                showProcurementDashboard && activeTab === 'documents'
-              "
+        <!-- Actions: sticky bar so button is always visible and clickable -->
+        <div
+          class="detail-actions no-print"
+          v-if="canEditDraft || showApproveDecline || showProcurementDashboard"
+        >
+          <template v-if="canEditDraft">
+            <button
+              type="button"
+              class="btn btn-danger"
+              :disabled="actionLoading"
+              @click="openConfirmDiscard"
+              style="display: flex; align-items: center; gap: 8px"
             >
-              <button type="button" class="btn btn-primary btn-print" @click="doPrint">
-                Print / Save as PDF
-              </button>
-            </template>
-          </div>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M3 6h18"></path>
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+              </svg>
+              Discard Draft
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              :disabled="actionLoading"
+              @click="openConfirmEdit"
+            >
+              Edit Draft
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="actionLoading"
+              @click="openConfirmSubmit"
+            >
+              Submit for Approval
+            </button>
+          </template>
+          <template v-else-if="showApproveDecline">
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="actionLoading"
+              @click="openConfirmApprove"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              class="btn btn-danger"
+              :disabled="actionLoading"
+              @click="openDeclineModal"
+            >
+              Decline
+            </button>
+          </template>
+          <template v-else-if="showProcurementDashboard && activeTab === 'documents'">
+            <button type="button" class="btn btn-primary btn-print" @click="doPrint">
+              Print / Save as PDF
+            </button>
+          </template>
         </div>
       </div>
     </template>
@@ -1963,9 +1979,9 @@ onUnmounted(() => {
 .form-unified-table {
   width: 100%;
   border-collapse: collapse;
-  border: 2px solid #000;
-  margin-bottom: 20px;
-  font-size: 11px; /* Default table font size */
+  border: 1.5px solid #000;
+  margin-bottom: 12px;
+  font-size: 10.5px; /* Slightly smaller for better fit */
 }
 
 .form-unified-table td,
@@ -1981,36 +1997,41 @@ onUnmounted(() => {
   padding: 0 !important;
   background: #fff;
   border-bottom: 2px solid #000 !important;
+  height: 100%;
 }
 
 .header-content {
   display: flex;
   align-items: stretch;
+  height: 100%;
+  min-height: 55px;
 }
 
 .logo-box {
-  width: 100px; /* Reduced width */
-  border-right: 2px solid #000;
-  padding: 5px;
+  width: 90px;
+  border-right: 3px solid #000;
+  padding: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #fff;
   flex-shrink: 0;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .logo {
-  max-width: 80px;
-  max-height: 80px;
+  max-width: 60px;
+  max-height: 50px;
   width: auto;
-  height: auto;
+  height: 50px;
   object-fit: contain;
 }
 
 .header-text-box {
   flex: 1;
   text-align: center;
-  padding: 5px; /* Reduced padding */
+  padding: 3px 5px; /* Further reduced */
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -2018,10 +2039,10 @@ onUnmounted(() => {
 
 .company-name {
   margin: 0;
-  padding-bottom: 2px;
-  border-bottom: 2px solid #000; /* Replaces divider line for print safety */
+  padding-bottom: 1px;
+  border-bottom: 1.5px solid #000; /* Replaces divider line for print safety */
   width: 100%;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   color: #000;
@@ -2030,8 +2051,8 @@ onUnmounted(() => {
 /* Removed .divider-line */
 
 .form-title {
-  margin: 2px 0 0 0;
-  font-size: 18px; /* Slightly smaller title */
+  margin: 1px 0 0 0;
+  font-size: 16px; /* Slightly smaller title */
   font-weight: 900;
   text-transform: uppercase;
   color: #000;
@@ -2075,6 +2096,8 @@ onUnmounted(() => {
   font-weight: 600; /* Make data content readable/bolder */
   color: #000;
   font-size: 11px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Purpose Row */
@@ -2091,19 +2114,20 @@ onUnmounted(() => {
   margin-left: 5px;
   font-weight: 600; /* Make purpose readable */
   color: #000;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .sig-row td {
   width: 33.33%;
-  padding: 10px;
+  padding: 4px 8px; /* Further reduced to save vertical space */
   vertical-align: top;
 }
 
 .sig-label {
-  font-size: 11px;
-  font-weight: 700; /* Bold */
-  color: #000; /* Pure black */
-
-  margin-bottom: 6px; /* reasonable space between label and name */
+  font-size: 10px;
+  font-weight: 700;
+  color: #000;
+  margin-bottom: 3px;
 }
 
 .sig-name {
@@ -2111,6 +2135,7 @@ onUnmounted(() => {
   text-align: center;
   color: #000;
   white-space: nowrap;
+  font-size: 11px;
 }
 
 /* Signature over printed name: name visible, signature overlays it */
@@ -2139,8 +2164,8 @@ onUnmounted(() => {
   pointer-events: none;
 }
 .sig-name-overlay .sig-image {
-  max-width: 140px;
-  max-height: 48px;
+  max-width: 130px;
+  max-height: 40px;
   object-fit: contain;
 }
 
@@ -2149,18 +2174,54 @@ onUnmounted(() => {
   font-style: italic;
 }
 
+/* 2-Copy Print Styles */
+.print-page-wrapper {
+  page-break-inside: avoid;
+  break-inside: avoid;
+  /* If both copies fit on 1 page comfortably, they stay.
+     If copy 2 overflows even slightly, it gets pushed entirely to the next page. */
+}
+
+.copy-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+  text-align: right;
+}
+
+.print-separator {
+  border-top: 1px dashed #cbd5e1;
+  margin: 10px 0;
+  width: 100%;
+}
+
+@media screen {
+  .no-print-screen {
+    display: none !important;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
+
 .sig-line {
   width: 80%;
   margin: 0 auto;
-  border-bottom: 1px solid #333;
+  border-bottom: 1.2px solid #000;
 }
 
 .sig-sub {
-  font-size: 10px;
+  font-size: 9px;
   font-style: italic;
   text-align: center;
-  color: #000; /* Pure black */
-  font-weight: 600; /* Slightly bolder */
+  color: #444;
+  font-weight: 500;
 }
 
 /* Print optimization */
@@ -2174,9 +2235,7 @@ onUnmounted(() => {
     box-shadow: none;
   }
 }
-</style>
 
-<style scoped>
 .detail-view {
   width: 100%;
   max-width: 960px;
@@ -2437,6 +2496,9 @@ onUnmounted(() => {
 .purpose-value {
   font-weight: 500;
   line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Items section */
@@ -2468,6 +2530,8 @@ onUnmounted(() => {
   text-align: left;
   border-bottom: 1px solid var(--detail-border);
   vertical-align: middle;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .items-table th {
@@ -2487,11 +2551,17 @@ onUnmounted(() => {
   text-align: center;
 }
 .items-table .col-qty {
-  width: 4rem;
+  width: 4.5rem;
   text-align: center;
 }
 .items-table .col-unit {
-  width: 5rem;
+  width: 8.5rem;
+}
+.items-table .col-desc {
+  min-width: 15rem;
+}
+.items-table .col-remarks {
+  width: 10rem;
 }
 .items-table tbody tr:hover {
   background: #f8fafc;
@@ -3768,92 +3838,93 @@ onUnmounted(() => {
   font-size: 1.125rem;
 }
 
-.screen-view {
-  display: block;
-  min-height: 0;
+/* Hide the second copy and copy labels on the screen */
+.print-only-copy,
+.no-print-screen {
+  display: none;
 }
+</style>
 
+<style>
+/**
+ * GLOBAL PRINT OVERRIDES
+ * Moved to non-scoped style to ensure it hits body, html, and container root perfectly.
+ */
 @media print {
-  .no-print,
-  .screen-view,
-  .detail-actions {
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  /* Force display:block on all parent containers to unlock page breaks */
+  #app,
+  .layout,
+  .main-content,
+  .main,
+  .main-page,
+  .detail-view,
+  .detail-container-outer,
+  .detail-content,
+  .form-document.form-container,
+  .form-document,
+  .app-content {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #fff !important;
+  }
+
+  /* Hide navigation elements from print */
+  .sidebar,
+  .header {
     display: none !important;
   }
 
-  .print-form {
+  .print-page-wrapper {
     display: block !important;
-  }
-
-  .detail-view {
-    background: #fff;
-    padding: 0;
-    margin: 0;
-    width: 100%;
-    max-width: none;
-  }
-
-  .detail-content {
-    box-shadow: none;
-    border: none;
-    padding: 0;
-    background: #fff;
-    max-width: none;
-  }
-
-  .form-document.form-container {
-    box-shadow: none;
-    max-width: 1000px;
+    width: 100% !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 
   .form-document .print-page {
-    width: 100%;
-    min-height: 297mm;
-    padding: 12mm 15mm;
-    margin: 0 auto;
-    background: #fff;
+    width: 100% !important;
+    padding: 3mm 5mm !important;
+    margin: 0 !important;
+    background: #fff !important;
+    box-sizing: border-box !important;
   }
 
-  .form-document .header {
-    border-color: #000;
+  .no-print-screen {
+    display: block !important;
+    visibility: visible !important;
   }
-  .form-document .form-info,
-  .form-document .form-info label,
-  .form-document .form-info-val,
-  .form-document .form-dept,
-  .form-document .form-dept label,
-  .form-document .form-dept-val,
-  .form-document .form-items-table,
-  .form-document .form-items-table th,
-  .form-document .form-items-table td,
-  .form-document .purpose-row td,
-  .form-document .purpose-val,
-  .form-document .sig-label,
-  .form-document .sig-name,
-  .form-document .sig-sub,
-  .form-document .footer,
-  .form-document .footer-label {
-    color: #000;
+
+  .copy-label {
+    color: #444 !important;
+    font-weight: 900 !important;
+    margin-bottom: 2px !important;
   }
-  .form-document .form-items-table th,
-  .form-document .form-items-table td {
-    border-color: #000;
-  }
-  .form-document .form-items-table th {
-    background: #f0f0f0;
-  }
-  .form-document .sig-name {
-    border-color: #000;
+
+  /* Force the second copy to show up when printing */
+  .print-only-copy {
+    display: block !important;
   }
 
   @page {
     size: A4;
-    margin: 0;
-  }
-
-  body {
-    margin: 0;
-    padding: 0;
-    background: #fff;
+    margin: 8mm 5mm;
   }
 }
 

@@ -121,7 +121,7 @@ const isoCertSrc = computed(() => {
         <tr>
           <th style="width: 50px">ITEM<br />NO.</th>
           <th style="width: 50px">QTY.</th>
-          <th style="width: 60px">UNIT</th>
+          <th style="width: 120px">UNIT</th>
           <th>DESCRIPTION</th>
           <th style="width: 70px">Source<br />of<br />Fund</th>
           <th style="width: 80px">UNIT PRICE</th>
@@ -134,7 +134,7 @@ const isoCertSrc = computed(() => {
           <td class="text-center">{{ idx + 1 }}</td>
           <td class="text-center">{{ item.quantity }}</td>
           <td class="text-center">{{ item.unit || '—' }}</td>
-          <td>{{ item.description || '—' }}</td>
+          <td style="overflow-wrap: anywhere; word-break: break-word;">{{ item.description || '—' }}</td>
           <td class="text-center">{{ item.sourceOfFund || '' }}</td>
           <td class="text-right">{{ formatCurrency(item.unitPrice) }}</td>
           <td class="text-center">{{ item.brand || '—' }}</td>

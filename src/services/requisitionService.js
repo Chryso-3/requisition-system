@@ -2912,7 +2912,8 @@ export function getPOStatusLog(requisition) {
  */
 export function subscribeRequisitions(filters, callback, onError, opts = {}) {
   const pageSize = opts.pageSize ?? REQUISITION_PAGE_SIZE
-  const q = buildRequisitionsQuery(filters || {}, { pageSize })
+  const startAfterDoc = opts.startAfter ?? null
+  const q = buildRequisitionsQuery(filters || {}, { pageSize, startAfterDoc })
   return subscribeWithFallback(
     q,
     true,

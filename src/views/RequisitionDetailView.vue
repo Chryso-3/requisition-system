@@ -13,12 +13,18 @@ import {
   APPROVAL_WORKFLOW,
   markRequisitionOrdered,
   markRequisitionReceived,
+  generateCanvassNo,
+  updateRequisition,
+  upsertRequisitionQuote,
+  subscribeRequisitionQuotes,
   markRequisitionCanvassed,
+  generatePbacFormNo,
   getPOStatusLog,
   deleteRequisition,
-  generateCanvassNo,
 } from '@/services/requisitionService'
+import { Download, FileText, ExternalLink, Edit2 } from 'lucide-vue-next'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
+import { compressImageToBase64 } from '@/utils/imageUtils'
 import {
   REQUISITION_STATUS,
   USER_ROLES,
@@ -63,7 +69,9 @@ const purchaseActionLoading = ref(false)
 const purchaseActionError = ref('')
 let unsubscribe = null
 let unsubscribeSigs = null
+let unsubscribeQuotes = null
 
+const quotes = ref([])
 // Signatures loaded from separate collection (prevents 1MB requisition doc).
 const sigMap = ref({})
 
@@ -74,6 +82,24 @@ function sigSrcFor(roleKey, fallbackObj) {
     fallbackObj?.signatureData ??
     null
   )
+}
+
+async function overridePbacNo() {
+  if (!isAdmin.value) return
+  const current = requisition.value.pbacFormNo || ''
+  const newVal = window.prompt('Override PBAC Form Number:', current)
+  if (newVal === null) return
+
+  try {
+    actionLoading.value = true
+    await updateRequisition(requisition.value.id, { pbacFormNo: newVal })
+    requisition.value.pbacFormNo = newVal
+  } catch (err) {
+    console.error('Error overriding PBAC No:', err)
+    alert('Failed to override PBAC Number.')
+  } finally {
+    actionLoading.value = false
+  }
 }
 
 const statusLog = computed(() => getRequisitionStatusLog(requisition.value))
@@ -121,27 +147,37 @@ const canEditDraft = computed(() => {
 
 const fromAuditLog = computed(() => from.value === 'audit-log')
 
-const approverRole = computed(() => authStore?.role)
+const approverRole = computed(() => authStore?.role || authStore.userProfile?.role)
 
 const showApproveDecline = computed(() => {
   const r = requisition.value
   if (!r) return false
-  return canUserApprove(approverRole.value, r.status)
+  const canApprove = canUserApprove(approverRole.value, r.status)
+  console.log('[DEBUG] showApproveDecline:', canApprove, 'Role:', approverRole.value, 'Status:', r.status)
+  return canApprove
 })
 
 const isProcurementStaff = computed(() => {
-  return authStore?.role === USER_ROLES.PURCHASER || authStore?.role === USER_ROLES.BAC_SECRETARY
+  const role = authStore?.role || authStore.userProfile?.role
+  return role === USER_ROLES.PURCHASER || role === USER_ROLES.BAC_SECRETARY
 })
 
-const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
-const isAdmin = computed(() => authStore?.role === USER_ROLES.SUPER_ADMIN)
+const isPurchaser = computed(() => {
+  const role = authStore?.role || authStore.userProfile?.role
+  return role === USER_ROLES.PURCHASER
+})
+const isAdmin = computed(() => {
+  const role = authStore?.role || authStore.userProfile?.role
+  return role === USER_ROLES.SUPER_ADMIN
+})
 const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
 
 const isPOApprover = computed(() => {
+  const role = authStore?.role || authStore.userProfile?.role
   return (
-    authStore?.role === USER_ROLES.BUDGET_OFFICER ||
-    authStore?.role === USER_ROLES.INTERNAL_AUDITOR ||
-    authStore?.role === USER_ROLES.GENERAL_MANAGER
+    role === USER_ROLES.BUDGET_OFFICER ||
+    role === USER_ROLES.INTERNAL_AUDITOR ||
+    role === USER_ROLES.GENERAL_MANAGER
   )
 })
 
@@ -153,18 +189,40 @@ const showProcurementDashboard = computed(() => {
 
 const canViewCanvass = computed(() => {
   const r = requisition.value
-  if (!r || r.status !== REQUISITION_STATUS.APPROVED) return false
-  return isProcurementStaff.value || isPOApprover.value || isAdmin.value || isRequestor.value
+  if (!r || r.status === REQUISITION_STATUS.DRAFT) return false
+  const role = authStore?.role || authStore.userProfile?.role
+
+  if (isProcurementStaff.value) return true
+  if (isPOApprover.value) return true
+  if (isAdmin.value) return true
+
+  const uid = authStore.user?.uid
+  if (isRequestor.value) return true
+  return false
 })
 
 const canViewPO = computed(() => {
   const r = requisition.value
-  if (!r || r.status !== REQUISITION_STATUS.APPROVED) return false
-  // Procurement, Approvers and Admins can always see it if it exists
-  if (isProcurementStaff.value || isPOApprover.value || isAdmin.value) return !!r.poStatus
+  if (!r || !r.poNumber) return false
+  const role = authStore?.role || authStore.userProfile?.role
+
+  if (isProcurementStaff.value) return true
+  if (isPOApprover.value) return true
+  if (isAdmin.value) return true
   // Requestors can only see it when fully approved
   if (isRequestor.value) return r.poStatus === PO_STATUS.APPROVED
   return false
+})
+
+const canViewQuotes = computed(() => {
+  const role = authStore?.role || authStore.userProfile?.role
+  // Support both key 'bac_secretary' and label 'BAC Secretary' for robustness
+  const isBAC = role === USER_ROLES.BAC_SECRETARY || role === 'BAC Secretary'
+  const isAdmin = role === USER_ROLES.SUPER_ADMIN || role === 'Super Administrator'
+  const canView = isBAC || isAdmin
+  
+  console.log('[DEBUG] canViewQuotes:', canView, 'User Role:', role)
+  return canView
 })
 
 const purchaseStatusDisplay = computed(
@@ -235,6 +293,11 @@ const supplier = ref('')
 const canvassItems = ref([])
 const canvassActionLoading = ref(false)
 const canvassActionError = ref('')
+const selectedQuotes = ref([
+  { file: null, base64: null, name: '' },
+  { file: null, base64: null, name: '' },
+  { file: null, base64: null, name: '' },
+])
 
 const milestones = computed(() => {
   const r = requisition.value
@@ -327,6 +390,39 @@ function openCanvassModal() {
 function closeCanvassModal() {
   canvassModalOpen.value = false
   canvassActionError.value = ''
+  selectedQuotes.value = [
+    { file: null, base64: null, name: '' },
+    { file: null, base64: null, name: '' },
+    { file: null, base64: null, name: '' },
+  ]
+}
+
+async function handleQuoteFile(e, index) {
+  const file = e.target.files[0]
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    canvassActionError.value = 'Please upload image files only (JPG, PNG).'
+    return
+  }
+
+  canvassActionLoading.value = true
+  try {
+    // Compress immediately to ensure we stay under Firestore limits and save memory
+    const compressedBase64 = await compressImageToBase64(file, 1024, 0.6)
+    selectedQuotes.value[index].file = file
+    selectedQuotes.value[index].base64 = compressedBase64
+    selectedQuotes.value[index].name = file.name
+  } catch (err) {
+    console.error('Image compression error:', err)
+    canvassActionError.value = 'Failed to process image.'
+  } finally {
+    canvassActionLoading.value = false
+  }
+}
+
+function clearQuote(index) {
+  selectedQuotes.value[index] = { file: null, base64: null, name: '' }
 }
 
 async function saveCanvassOrder() {
@@ -335,26 +431,41 @@ async function saveCanvassOrder() {
     canvassActionError.value = 'Missing digital signature. Please set it up in your Profile.'
     return
   }
-  if (!supplier.value.trim()) {
-    canvassActionError.value = 'Please enter the winning supplier.'
+
+  // Validate 3 quotes
+  const quotesCount = selectedQuotes.value.filter((q) => q.file || q.base64).length
+  if (quotesCount < 3) {
+    canvassActionError.value = 'Please upload all 3 supplier quotes/images before submitting.'
     return
   }
+
   canvassActionLoading.value = true
   canvassActionError.value = ''
   try {
     const user = authStore.user
-    await markRequisitionCanvassed(requisition.value.id, {
+    const requisitionId = requisition.value.id
+
+    // 1. Save compressed quotes first
+    for (let i = 0; i < selectedQuotes.value.length; i++) {
+      const q = selectedQuotes.value[i]
+      await upsertRequisitionQuote(requisitionId, `quote_${i + 1}`, q.base64)
+    }
+
+    // 2. Mark canvassed
+    await markRequisitionCanvassed(requisitionId, {
       canvassNumber: canvassNumber.value.trim() || undefined,
       canvassDate: canvassDate.value ? new Date(canvassDate.value + 'T12:00:00') : new Date(),
       canvassBy: user
         ? { userId: user.uid, name: authStore?.displayName, email: user.email }
         : null,
-      supplier: supplier.value.trim(),
+      supplier: supplier.value.trim() || undefined, // Make optional
       items: canvassItems.value,
       signatureData: authStore.userProfile?.signatureData,
+      hasQuotes: true,
     })
     closeCanvassModal()
   } catch (e) {
+    console.error('Save canvass error:', e)
     canvassActionError.value = e?.message || 'Failed to record canvass order.'
   } finally {
     canvassActionLoading.value = false
@@ -644,10 +755,20 @@ function doPrint() {
   window.print()
 }
 
-function setPrintMode(mode) {
+async function setPrintMode(mode) {
   if (mode === 'pbac-form-01' && !canViewCanvass.value) return
   if (mode === 'purchase-order' && !canViewPO.value) return
   printMode.value = mode
+
+  // Auto-generate PBAC Form No if missing and viewing PBAC Form
+  if (mode === 'pbac-form-01' && requisition.value && !requisition.value.pbacFormNo) {
+    try {
+      const nextNo = await generatePbacFormNo()
+      await updateRequisition(id.value, { pbacFormNo: nextNo })
+    } catch (e) {
+      console.error('Failed to auto-generate PBAC Form No:', e)
+    }
+  }
 }
 
 function initSubscriptions() {
@@ -702,7 +823,41 @@ watch(id, () => {
 onUnmounted(() => {
   if (unsubscribe) unsubscribe()
   if (unsubscribeSigs) unsubscribeSigs()
+  if (unsubscribeQuotes) unsubscribeQuotes()
 })
+
+// Quotes subscription
+watch(
+  () => id.value,
+  (newId) => {
+    if (unsubscribeQuotes) {
+      unsubscribeQuotes()
+      unsubscribeQuotes = null
+    }
+
+    if (newId) {
+      unsubscribeQuotes = subscribeRequisitionQuotes(
+        newId,
+        (data) => {
+          console.log('[DEBUG] subscribeRequisitionQuotes results:', data.length, 'items')
+          quotes.value = data
+        },
+        (err) => console.error('Error subscribing to quotes:', err),
+      )
+    }
+  },
+  { immediate: true },
+)
+
+function downloadQuote(quote) {
+  if (!quote.base64) return
+  const link = document.createElement('a')
+  link.href = quote.base64
+  link.download = `${quote.name || 'quote'}.png`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
 </script>
 <template>
   <div class="detail-view">
@@ -1031,7 +1186,7 @@ onUnmounted(() => {
                             </div>
                           </div>
                           <div class="sig-line"></div>
-                          <div class="sig-sub">Section Head / Div. Head / Department Head</div>
+                          <div class="sig-sub">Section Head / Manager / Supervisor</div>
                         </td>
 
                         <td colspan="2">
@@ -1171,9 +1326,8 @@ onUnmounted(() => {
                 <div v-if="i === 1 && !isLongForm" class="print-separator no-print-screen"></div>
               </div>
             </div>
-          </template>
 
-          <template v-else-if="!showProcurementDashboard || activeTab === 'overview'">
+          </template><template v-else-if="!showProcurementDashboard || activeTab === 'overview'">
             <div class="screen-view">
               <header class="detail-header">
                 <div class="detail-header-inner">
@@ -1197,6 +1351,21 @@ onUnmounted(() => {
                   <div class="detail-block">
                     <span class="detail-block-label">RF Control No.</span>
                     <span class="detail-block-value">{{ requisition.rfControlNo || '—' }}</span>
+                  </div>
+                  <div v-if="requisition.pbacFormNo" class="detail-block">
+                    <span class="detail-block-label">PBAC Form No.</span>
+                    <span class="detail-block-value" style="display: flex; align-items: center; gap: 8px;">
+                      {{ requisition.pbacFormNo }}
+                      <button
+                        v-if="isAdmin"
+                        @click="overridePbacNo"
+                        class="btn-icon-link"
+                        title="Override PBAC No"
+                        style="color: #64748b; padding: 2px"
+                      >
+                        <Edit2 :size="14" />
+                      </button>
+                    </span>
                   </div>
                   <div class="detail-block">
                     <span class="detail-block-label">Date</span>
@@ -1391,6 +1560,37 @@ onUnmounted(() => {
               </section>
             </div>
           </template>
+
+          <!-- Attached Quotes Section (Only for BAC/Admin) - Placed outside tabs for constant visibility -->
+          <div v-if="canViewQuotes && quotes.length > 0" class="attached-quotes-section no-print">
+            <div class="quotes-header">
+              <div class="quotes-header-title">
+                <FileText :size="18" />
+                <span>Attached Supplier Quotes (3)</span>
+              </div>
+              <p class="quotes-header-desc">These attachments are visible only to the BAC and Admins.</p>
+            </div>
+
+            <div class="quotes-grid">
+              <div v-for="q in quotes" :key="q.id" class="quote-card">
+                <div class="quote-preview">
+                  <img :src="q.base64" :alt="q.name" />
+                  <div class="quote-overlay">
+                    <button class="btn-download" title="Download Quote" @click="downloadQuote(q)">
+                      <Download :size="20" />
+                    </button>
+                  </div>
+                </div>
+                <div class="quote-info">
+                  <span class="quote-name">{{ q.name }}</span>
+                  <button class="quote-action-link" @click="downloadQuote(q)">
+                    <Download :size="14" />
+                    Download
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Actions: sticky bar so button is always visible and clickable -->
@@ -1528,8 +1728,8 @@ onUnmounted(() => {
       <div class="confirm-modal">
         <h3 class="confirm-title">Submit for approval</h3>
         <p class="confirm-message">
-          Submit this requisition for approval? It will be sent to Section Head / Div. Head /
-          Department Head.
+          Submit this requisition for approval? It will be sent to Section Head / Manager /
+          Supervisor.
         </p>
         <div v-if="!hasSignature" class="signature-warning">
           <svg
@@ -1696,6 +1896,22 @@ onUnmounted(() => {
                 <span>Canvass Date</span>
                 <input v-model="canvassDate" type="date" class="purchase-modal-input" />
               </label>
+            </div>
+          </div>
+
+          <div class="modal-divider">Supplier Quotes (Required: 3 Images)</div>
+          <div class="hub-quote-grid">
+            <div v-for="(q, idx) in selectedQuotes" :key="idx" class="hub-quote-slot">
+              <div v-if="!q.base64" class="hub-quote-placeholder" @click="$refs['quoteInput' + idx][0].click()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                <span>Upload Quote {{ idx + 1 }}</span>
+              </div>
+              <div v-else class="hub-quote-preview-wrap">
+                <img :src="q.base64" :alt="q.name" class="hub-quote-preview" />
+                <button class="hub-quote-remove" @click="clearQuote(idx)">&times;</button>
+                <div class="hub-quote-name">{{ q.name }}</div>
+              </div>
+              <input :ref="'quoteInput' + idx" type="file" accept="image/*" @change="handleQuoteFile($event, idx)" hidden />
             </div>
           </div>
 
@@ -2207,6 +2423,15 @@ onUnmounted(() => {
 @media print {
   .no-print {
     display: none !important;
+  }
+  .print-form-container,
+  .pbac-document,
+  .form-container {
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+    background: #fff !important;
   }
 }
 
@@ -4096,5 +4321,224 @@ onUnmounted(() => {
 }
 .text-right {
   text-align: right;
+}
+
+/* Quote Grid for Detail View */
+.hub-quote-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.hub-quote-slot {
+  aspect-ratio: 4 / 3;
+  border: 2px dashed #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  background: #f8fafc;
+  transition: all 0.2s;
+}
+.hub-quote-slot:hover {
+  border-color: #2563eb;
+  background: #f1f5f9;
+}
+
+.hub-quote-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.hub-quote-placeholder svg {
+  opacity: 0.5;
+}
+
+.hub-quote-preview-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+.hub-quote-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.hub-quote-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6);
+  color: #fff;
+  border: none;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.hub-quote-remove:hover {
+  background: #ef4444;
+}
+.hub-quote-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 0.65rem;
+  padding: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+/* Attached Quotes Styling */
+.attached-quotes-section {
+  margin: 2rem 0;
+  padding: 1.5rem;
+  background: white;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.quotes-header {
+  margin-bottom: 1.5rem;
+}
+
+.quotes-header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.25rem;
+}
+
+.quotes-header-desc {
+  font-size: 0.875rem;
+  color: #64748b;
+}
+
+.quotes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1.5rem;
+}
+
+.quote-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.quote-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+.quote-preview {
+  position: relative;
+  aspect-ratio: 4/3;
+  background: #fff;
+  overflow: hidden;
+}
+
+.quote-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 0.5rem;
+}
+
+.quote-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.quote-preview:hover .quote-overlay {
+  opacity: 1;
+}
+
+.btn-download {
+  background: white;
+  color: #0ea5e9;
+  border: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+
+.btn-download:hover {
+  transform: scale(1.1);
+  background: #0ea5e9;
+  color: white;
+}
+
+.quote-info {
+  padding: 0.75rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.quote-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.quote-action-link {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #0ea5e9;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.quote-action-link:hover {
+  text-decoration: underline;
+}
+
+.text-success {
+  color: #10b981;
+  font-weight: 600;
 }
 </style>

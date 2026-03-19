@@ -1,5 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+import isoCert from '@/assets/iso_certification.png'
+import { subscribeRequisitionQuotes } from '@/services/requisitionService'
 
 const props = defineProps({
   requisition: {
@@ -31,14 +33,33 @@ function sigSrcFor(roleKey, fallbackObj) {
 }
 
 const isoCertSrc = computed(() => {
-  return '/src/assets/iso_certification.png'
+  return isoCert
+})
+
+const quotes = ref([])
+let quotesUnsub = null
+
+onMounted(() => {
+  if (props.requisition?.id) {
+    quotesUnsub = subscribeRequisitionQuotes(
+      props.requisition.id,
+      (results) => {
+        quotes.value = results
+      },
+      (err) => console.error('Failed to load quotes:', err)
+    )
+  }
+})
+
+onUnmounted(() => {
+  if (quotesUnsub) quotesUnsub()
 })
 </script>
 
 <template>
   <div class="pbac-form-wrapper">
     <!-- Header Section -->
-    <div class="header">
+    <div class="form-header">
       <div class="logo-left">
         <img src="@/assets/logos.png" alt="LEYECO III" class="main-logo" />
         <div class="company-info">
@@ -58,7 +79,7 @@ const isoCertSrc = computed(() => {
       </div>
     </div>
 
-    <div class="form-id">PBAC FORM 01</div>
+    <div class="form-id">{{ requisition?.pbacFormNo || 'PBAC FORM 01' }}</div>
 
     <div class="form-title-row">
       <div class="canvass-no">
@@ -75,11 +96,11 @@ const isoCertSrc = computed(() => {
     <div class="instructions">
       <p>
         Sealed Canvass Proposal for furnishing and delivery of the following materials listed below
-        will be opened on at the office of the Leyte III Electric Cooperative, Inc. Canvass Proposal
+        will be opened on at the office of the Leyte III Electric Cooperative, Inc. <strong>Canvass Proposal
         must be signed over printed name by the dealers/suppliers enclosed/attached to the quotation
         is a sealed envelope addressed to Leyte III Electric Cooperative, Inc., Real St., Brgy. San
-        Roque, Tunga, Leyte. Please attach to the Canvass Proposal your official quotation on your
-        company's letterhead. Late proposal will not be entertained.
+        Roque, Tunga, Leyte.</strong> <strong>Please attach to the Canvass Proposal your official quotation on your
+        company's letterhead.</strong> Late proposal will not be entertained.
       </p>
       <p>
         <strong>IMPORTANT:</strong> LEYECO III reserves the right to reject any or all bids without
@@ -201,6 +222,7 @@ const isoCertSrc = computed(() => {
       </div>
     </div>
 
+
     <!-- Footer -->
     <div class="footer">
       <p>Brgy. San Roque, Tunga, Leyte</p>
@@ -223,7 +245,7 @@ const isoCertSrc = computed(() => {
   line-height: 1.2;
 }
 
-.header {
+.form-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -468,6 +490,7 @@ const isoCertSrc = computed(() => {
   color: blue;
   text-decoration: underline;
 }
+
 
 @media print {
   .pbac-form-wrapper {

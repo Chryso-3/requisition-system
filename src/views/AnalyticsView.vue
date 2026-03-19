@@ -258,7 +258,8 @@ function updateData() {
 
     return {
       stage,
-      avgDays: durFiltered.count > 0 ? (durFiltered.totalMs / durFiltered.count / 86400000).toFixed(2) : 0,
+      avgDays:
+        durFiltered.count > 0 ? (durFiltered.totalMs / durFiltered.count / 86400000).toFixed(2) : 0,
       activeCount,
       activeAvgDays: activeCount > 0 ? (liveActiveTotalMs / activeCount / 86400000).toFixed(2) : 0,
     }
@@ -412,30 +413,49 @@ function safeAbbreviate(name) {
 function formatLastUpdated(val) {
   if (!val) return 'Never'
   const d = val?.toDate ? val.toDate() : new Date(val)
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return (
+    d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  )
 }
 
 function renderCharts() {
   if (!data.value) return
   destroyCharts()
 
-  const defaultFont = 'Inter, system-ui, -apple-system, sans-serif'
-  const gridColor = 'rgba(0, 0, 0, 0.05)'
-  const tickColor = '#64748b' // slate-500
-  const cardBgColor = '#ffffff'
-  const tooltipBorder = 'rgba(0, 0, 0, 0.1)'
+  const defaultFont = '"DM Sans", "Inter", system-ui, -apple-system, sans-serif'
+  const gridColor = 'rgba(15, 23, 42, 0.06)'
+  const tickColor = '#94a3b8' // slate-400
+  const cardBgColor = '#0f172a'
+  const tooltipBorder = 'rgba(255,255,255,0.08)'
+
+  // Premium tooltip config shared across all charts
+  const premiumTooltip = {
+    backgroundColor: '#0f172a',
+    titleColor: '#f1f5f9',
+    bodyColor: '#94a3b8',
+    borderColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    padding: { x: 14, y: 10 },
+    cornerRadius: 12,
+    titleFont: { family: defaultFont, size: 12, weight: '600' },
+    bodyFont: { family: defaultFont, size: 12 },
+    displayColors: true,
+    boxWidth: 8,
+    boxHeight: 8,
+    boxPadding: 4,
+  }
 
   const getStageColor = (status) => {
     const stageColors = {
-      pending_recommendation: '#8b0000', // primary
-      pending_inventory: '#cc0000', // chart-2
-      pending_budget: '#f97316', // chart-3
-      pending_audit: '#0d9488', // chart-4
-      pending_approval: '#eab308', // chart-5
-      approved: '#8b0000', // primary
-      rejected: '#ef4444', // destructive
+      pending_recommendation: '#818cf8', // indigo-400
+      pending_inventory: '#818cf8', // indigo-400
+      pending_budget: '#818cf8', // indigo-400
+      pending_audit: '#818cf8', // indigo-400
+      pending_approval: '#818cf8', // indigo-400
+      approved: '#10b981', // emerald-500
+      rejected: '#f43f5e', // rose-500
     }
-    return stageColors[status] || '#94a3b8' // muted
+    return stageColors[status] || '#cbd5e1' // slate-300
   }
 
   // 1. Pipeline Chart (Phase Aware)
@@ -462,7 +482,16 @@ function renderCharts() {
 
     const chartColors = isReq
       ? chartData.map((p) => getStageColor(p.status))
-      : ['#0d9488', '#0f766e', '#115e59', '#134e4a'] // Gradient of Teal for PO
+      : ['#5eead4', '#2dd4bf', '#14b8a6', '#0f766e'] // Subtle teal gradient for PO
+
+    // Build gradient fills per bar
+    const pipelineCtx = pipelineEl.getContext('2d')
+    const gradientColors = chartColors.map((color) => {
+      const g = pipelineCtx.createLinearGradient(0, 0, pipelineEl.width || 400, 0)
+      g.addColorStop(0, color)
+      g.addColorStop(1, color + 'bb')
+      return g
+    })
 
     chartPipeline = new Chart(pipelineEl, {
       type: 'bar',
@@ -472,9 +501,9 @@ function renderCharts() {
           {
             label: isReq ? 'Requisitions' : 'Purchase Orders',
             data: chartData.map((p) => p.count),
-            backgroundColor: chartColors,
-            barThickness: 20,
-            borderRadius: 20,
+            backgroundColor: gradientColors,
+            barThickness: 18,
+            borderRadius: 99,
           },
         ],
       },
@@ -482,20 +511,10 @@ function renderCharts() {
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { left: -10, right: 10, top: 4, bottom: 4 } },
+        layout: { padding: { left: 0, right: 16, top: 6, bottom: 6 } },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            backgroundColor: cardBgColor,
-            titleColor: '#0f172a',
-            bodyColor: '#0f172a',
-            borderColor: tooltipBorder,
-            borderWidth: 1,
-            padding: 8,
-            cornerRadius: 8,
-            titleFont: { family: defaultFont, size: 12 },
-            bodyFont: { family: defaultFont, size: 12 },
-          },
+          tooltip: { ...premiumTooltip },
         },
         scales: {
           x: {
@@ -505,7 +524,7 @@ function renderCharts() {
             border: { display: false },
           },
           y: {
-            ticks: { font: { size: 11, family: defaultFont }, color: tickColor },
+            ticks: { font: { size: 11, family: defaultFont }, color: tickColor, padding: 4 },
             grid: { display: false, drawBorder: false },
             border: { display: false },
           },
@@ -517,6 +536,10 @@ function renderCharts() {
   const deptEl = document.getElementById('chart-department')
   if (deptEl && data.value.byDepartment?.length) {
     const dept = data.value.byDepartment
+    const deptCtx = deptEl.getContext('2d')
+    const deptGradient = deptCtx.createLinearGradient(0, 0, 0, 280)
+    deptGradient.addColorStop(0, '#6366f1')
+    deptGradient.addColorStop(1, '#818cf8aa')
     chartDepartment = new Chart(deptEl, {
       type: 'bar',
       data: {
@@ -528,12 +551,9 @@ function renderCharts() {
           {
             label: 'Requisitions',
             data: dept.map((d) => d.count),
-            backgroundColor: dept.map((_, i) => {
-              const colors = ['#8b0000', '#cc0000', '#f97316', '#0d9488', '#eab308']
-              return colors[i % colors.length]
-            }),
-            barThickness: 32,
-            borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 },
+            backgroundColor: deptGradient,
+            barThickness: 28,
+            borderRadius: { topLeft: 8, topRight: 8, bottomLeft: 0, bottomRight: 0 },
           },
         ],
       },
@@ -544,15 +564,7 @@ function renderCharts() {
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: cardBgColor,
-            titleColor: '#0f172a',
-            bodyColor: '#0f172a',
-            borderColor: tooltipBorder,
-            borderWidth: 1,
-            padding: 8,
-            cornerRadius: 8,
-            titleFont: { family: defaultFont, size: 12 },
-            bodyFont: { family: defaultFont, size: 12 },
+            ...premiumTooltip,
             callbacks: {
               label: (ctx) => `Volume: ${ctx.parsed.y} (${dept[ctx.dataIndex].pct}%)`,
             },
@@ -589,40 +601,33 @@ function renderCharts() {
         datasets: [
           {
             data: [ar.approved || 0, ar.rejected || 0],
-            backgroundColor: ['#10b981', '#ef4444'], // Emerald green (Approved), Standard red (Rejected)
-            borderWidth: 0,
-            hoverOffset: 4,
+            backgroundColor: ['#10b981', '#f43f5e'],
+            borderWidth: 3,
+            borderColor: '#ffffff',
+            hoverOffset: 8,
+            hoverBorderColor: '#ffffff',
           },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: 12 },
+        layout: { padding: 16 },
         plugins: {
           legend: {
             position: 'bottom',
             labels: {
-              font: { size: 12, family: defaultFont },
-              color: '#0f172a',
-              padding: 12,
+              font: { size: 12, family: defaultFont, weight: '500' },
+              color: '#475569',
+              padding: 16,
               usePointStyle: true,
+              pointStyle: 'circle',
               boxWidth: 8,
             },
           },
-          tooltip: {
-            backgroundColor: cardBgColor,
-            titleColor: '#0f172a',
-            bodyColor: '#0f172a',
-            borderColor: tooltipBorder,
-            borderWidth: 1,
-            padding: 8,
-            cornerRadius: 8,
-            titleFont: { family: defaultFont, size: 12 },
-            bodyFont: { family: defaultFont, size: 12 },
-          },
+          tooltip: { ...premiumTooltip },
         },
-        cutout: '60%',
+        cutout: '68%',
       },
     })
   }
@@ -630,6 +635,13 @@ function renderCharts() {
   const trendEl = document.getElementById('chart-trend')
   if (trendEl && data.value.monthlyTrend?.length) {
     const trend = data.value.monthlyTrend
+    const trendCtx = trendEl.getContext('2d')
+    const volumeGradient = trendCtx.createLinearGradient(0, 0, 0, 300)
+    volumeGradient.addColorStop(0, 'rgba(99, 102, 241, 0.18)')
+    volumeGradient.addColorStop(1, 'rgba(99, 102, 241, 0)')
+    const burnGradient = trendCtx.createLinearGradient(0, 0, 0, 300)
+    burnGradient.addColorStop(0, 'rgba(20, 184, 166, 0.15)')
+    burnGradient.addColorStop(1, 'rgba(20, 184, 166, 0)')
     chartTrend = new Chart(trendEl, {
       type: 'line',
       data: {
@@ -638,27 +650,31 @@ function renderCharts() {
           {
             label: 'Volume (Requests)',
             data: trend.map((t) => t.total),
-            borderColor: '#8b0000',
+            borderColor: '#6366f1',
             borderWidth: 2.5,
-            backgroundColor: 'transparent',
-            tension: 0.4,
+            backgroundColor: volumeGradient,
+            fill: true,
+            tension: 0.45,
             pointRadius: 4,
-            pointHoverRadius: 6,
-            pointBackgroundColor: '#8b0000',
-            pointBorderWidth: 0,
+            pointHoverRadius: 7,
+            pointBackgroundColor: '#6366f1',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
             yAxisID: 'y',
           },
           {
             label: 'Financial Burn (₱)',
             data: trend.map((t) => t.value),
-            borderColor: '#f97316',
+            borderColor: '#14b8a6',
             borderWidth: 2.5,
-            backgroundColor: 'transparent',
-            tension: 0.4,
+            backgroundColor: burnGradient,
+            fill: true,
+            tension: 0.45,
             pointRadius: 4,
-            pointHoverRadius: 6,
-            pointBackgroundColor: '#f97316',
-            pointBorderWidth: 0,
+            pointHoverRadius: 7,
+            pointBackgroundColor: '#14b8a6',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
             yAxisID: 'y1',
           },
         ],
@@ -667,35 +683,29 @@ function renderCharts() {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        layout: { padding: { top: 5, right: 10, left: -10, bottom: 5 } },
+        layout: { padding: { top: 8, right: 16, left: 0, bottom: 5 } },
         plugins: {
           legend: {
             display: true,
             position: 'top',
-            align: 'center',
+            align: 'end',
             labels: {
-              usePointStyle: false,
-              boxWidth: 12,
-              boxHeight: 2,
-              font: { size: 12, family: defaultFont },
-              color: '#0f172a',
+              usePointStyle: true,
+              pointStyle: 'circle',
+              boxWidth: 8,
+              boxHeight: 8,
+              font: { size: 12, family: defaultFont, weight: '500' },
+              color: '#64748b',
+              padding: 20,
             },
           },
           tooltip: {
-            backgroundColor: cardBgColor,
-            titleColor: '#0f172a',
-            bodyColor: '#0f172a',
-            borderColor: tooltipBorder,
-            borderWidth: 1,
-            padding: 8,
-            cornerRadius: 8,
-            titleFont: { family: defaultFont, size: 12 },
-            bodyFont: { family: defaultFont, size: 12 },
+            ...premiumTooltip,
             callbacks: {
               label: (ctx) => {
                 const val = ctx.parsed.y
-                if (ctx.datasetIndex === 0) return `Volume : ${val}`
-                return `Burn ($) : ${formatPeso(val)}`
+                if (ctx.datasetIndex === 0) return `  Volume : ${val}`
+                return `  Burn ($) : ${formatPeso(val)}`
               },
             },
           },
@@ -776,11 +786,11 @@ function renderCharts() {
     const ctx = bottleneckEl.getContext('2d')
     const gradient = ctx.createLinearGradient(0, 0, 400, 0)
     if (isReq) {
-      gradient.addColorStop(0, '#8b0000') // Deep Red
-      gradient.addColorStop(1, '#ef4444') // Bright Red
+      gradient.addColorStop(0, '#f43f5e') // rose-500
+      gradient.addColorStop(1, '#fb7185') // rose-400
     } else {
-      gradient.addColorStop(0, '#0d9488') // Deep Teal
-      gradient.addColorStop(1, '#2dd4bf') // Bright Teal
+      gradient.addColorStop(0, '#14b8a6') // teal-500
+      gradient.addColorStop(1, '#2dd4bf') // teal-400
     }
 
     chartBottlenecks = new Chart(bottleneckEl, {
@@ -796,9 +806,9 @@ function renderCharts() {
             data: bn.map((b) => Math.max(0, parseFloat(b.avgDays) || 0)),
             backgroundColor: bn.map((b) => {
               const days = parseFloat(b.avgDays) || 0
-              if (days >= 3) return '#ef4444' // Red
-              if (days >= 1) return '#f59e0b' // Amber
-              return '#10b981' // Emerald
+              if (days >= 3) return '#f43f5e' // rose-500
+              if (days >= 1) return '#fbbf24' // amber-400
+              return '#34d399' // emerald-400
             }),
             borderRadius: 5,
             barThickness: 12,
@@ -808,9 +818,9 @@ function renderCharts() {
             data: bn.map((b) => Math.max(0, parseFloat(b.activeAvgDays) || 0)),
             backgroundColor: bn.map((b) => {
               const days = parseFloat(b.activeAvgDays) || 0
-              if (days >= 3) return '#991b1b' // Dark Red
-              if (days >= 1) return '#92400e' // Dark Amber
-              return '#065f46' // Dark Emerald
+              if (days >= 3) return '#e11d48' // rose-600
+              if (days >= 1) return '#f59e0b' // amber-500
+              return '#10b981' // emerald-500
             }),
             borderRadius: 5,
             barThickness: 12,
@@ -839,18 +849,12 @@ function renderCharts() {
             },
           },
           tooltip: {
-            backgroundColor: cardBgColor,
-            titleColor: '#0f172a',
-            bodyColor: '#0f172a',
-            borderColor: tooltipBorder,
-            borderWidth: 1,
-            padding: 8,
-            cornerRadius: 8,
+            ...premiumTooltip,
             callbacks: {
               label: (ctx) => {
                 const b = bn[ctx.dataIndex]
-                if (ctx.datasetIndex === 0) return ` Historical Avg: ${b.avgDays} d`
-                return ` Active Aging: ${b.activeAvgDays} d (${b.activeCount} items)`
+                if (ctx.datasetIndex === 0) return `  Historical Avg: ${b.avgDays} d`
+                return `  Active Aging: ${b.activeAvgDays} d (${b.activeCount} items)`
               },
             },
           },
@@ -880,6 +884,10 @@ function renderCharts() {
   const financialEl = document.getElementById('chart-financials')
   if (financialEl && data.value.financials?.departmentalSpend?.length) {
     const fs = data.value.financials.departmentalSpend
+    const finCtx = financialEl.getContext('2d')
+    const finGradient = finCtx.createLinearGradient(400, 0, 0, 0)
+    finGradient.addColorStop(0, '#14b8a6')
+    finGradient.addColorStop(1, '#14b8a6aa')
     chartFinancials = new Chart(financialEl, {
       type: 'bar',
       data: {
@@ -888,9 +896,9 @@ function renderCharts() {
           {
             label: 'Total Spend (₱)',
             data: fs.map((f) => f.total),
-            backgroundColor: '#8b0000',
-            borderRadius: { topRight: 6, bottomRight: 6, topLeft: 0, bottomLeft: 0 },
-            barThickness: 24,
+            backgroundColor: finGradient,
+            borderRadius: { topRight: 8, bottomRight: 8, topLeft: 0, bottomLeft: 0 },
+            barThickness: 22,
           },
         ],
       },
@@ -898,21 +906,13 @@ function renderCharts() {
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { left: -10, right: 10, top: 4, bottom: 4 } },
+        layout: { padding: { left: 0, right: 16, top: 4, bottom: 4 } },
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: cardBgColor,
-            titleColor: 'hsl(var(--foreground))',
-            bodyColor: 'hsl(var(--foreground))',
-            borderColor: tooltipBorder,
-            borderWidth: 1,
-            padding: 8,
-            cornerRadius: 8,
-            titleFont: { family: defaultFont, size: 12 },
-            bodyFont: { family: defaultFont, size: 12 },
+            ...premiumTooltip,
             callbacks: {
-              label: (ctx) => formatPeso(ctx.parsed.x),
+              label: (ctx) => `  Spend: ${formatPeso(ctx.parsed.x)}`,
             },
           },
         },
@@ -928,7 +928,7 @@ function renderCharts() {
             border: { display: false },
           },
           y: {
-            ticks: { font: { size: 11, family: defaultFont }, color: tickColor },
+            ticks: { font: { size: 11, family: defaultFont }, color: tickColor, padding: 4 },
             grid: { display: false, drawBorder: false },
             border: { display: false },
           },
@@ -1182,7 +1182,7 @@ onUnmounted(() => {
               <div class="flex items-center justify-between mb-5">
                 <div>
                   <h3
-                    class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1"
+                    class="text-lg font-extrabold tracking-tight text-slate-900 mb-2"
                   >
                     {{
                       pipelinePhase === 'requisition'
@@ -1222,7 +1222,7 @@ onUnmounted(() => {
               <div class="flex items-center justify-between mb-5">
                 <div>
                   <h3
-                    class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1"
+                    class="text-lg font-extrabold tracking-tight text-slate-900 mb-2"
                   >
                     {{
                       bottleneckPhase === 'requisition'
@@ -1259,7 +1259,7 @@ onUnmounted(() => {
             </div>
 
             <div class="glass-card animate-fade-in" style="animation-delay: 300ms">
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+              <h3 class="text-lg font-extrabold tracking-tight text-slate-900 mb-2">
                 Decision Period
               </h3>
               <p class="text-xs text-muted-foreground mb-3">Approved vs rejected</p>
@@ -1284,19 +1284,19 @@ onUnmounted(() => {
             </div>
 
             <div class="glass-card animate-fade-in lg:col-span-2" style="animation-delay: 500ms">
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+              <h3 class="text-lg font-extrabold tracking-tight text-slate-900 mb-2">
                 By Department
               </h3>
               <p class="text-xs text-muted-foreground mb-5">
                 Requisitions per department in selected period (realtime)
               </p>
-              <div class="h-[280px]">
+              <div class="flex-1 w-full relative min-h-[250px]">
                 <canvas id="chart-department"></canvas>
               </div>
             </div>
 
             <div class="glass-card animate-fade-in lg:col-span-2" style="animation-delay: 550ms">
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+              <h3 class="text-lg font-extrabold tracking-tight text-slate-900 mb-2">
                 Spend by Department
               </h3>
               <p class="text-xs text-muted-foreground mb-5">
@@ -1311,7 +1311,7 @@ onUnmounted(() => {
               <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-5">
                 <div>
                   <h3
-                    class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1"
+                    class="text-lg font-extrabold tracking-tight text-slate-900 mb-2"
                   >
                     Strategic Burn & Volume Trend
                   </h3>
@@ -1373,15 +1373,17 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* Glassmorphism Elite Theme Variables (Light Mode) */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&display=swap');
+
+/* ── Premium Design System ── */
 .jinja {
-  --background: 0 0% 100%; /* White background */
-  --foreground: 222.2 84% 4.9%; /* Very dark slate for text */
+  --background: 210 20% 98%;
+  --foreground: 222.2 84% 4.9%;
   --card: 0 0% 100%;
   --card-foreground: 222.2 84% 4.9%;
   --popover: 0 0% 100%;
   --popover-foreground: 222.2 84% 4.9%;
-  --primary: 0 100% 27%; /* Brand Red #8b0000 -> hsl(0 100% 27%) */
+  --primary: 0 100% 27%;
   --primary-foreground: 210 40% 98%;
   --secondary: 210 40% 96.1%;
   --secondary-foreground: 222.2 47.4% 11.2%;
@@ -1395,70 +1397,78 @@ onUnmounted(() => {
   --input: 214.3 31.8% 91.4%;
   --ring: 222.2 84% 4.9%;
 
-  /* Chart Colors */
-  --chart-1: 0 100% 27%; /* Brand Red */
-  --chart-2: 0 80% 40%; /* Lighter Red */
-  --chart-3: 12 76% 61%; /* Coral/Orange */
-  --chart-4: 173 58% 39%; /* Teal contrast */
-  --chart-5: 43 74% 66%; /* Gold/Yellow contrast */
+  --chart-1: 0 100% 27%;
+  --chart-2: 0 80% 40%;
+  --chart-3: 12 76% 61%;
+  --chart-4: 173 58% 39%;
+  --chart-5: 43 74% 66%;
 
-  /* Extra Elite vars */
-  --glass-border: rgba(0, 0, 0, 0.08); /* Darker border for light mode */
-  --glass-bg: rgba(255, 255, 255, 0.7); /* White glass */
-  --glass-shadow:
-    0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03); /* Lighter shadow */
+  --glass-border: rgba(0, 0, 0, 0.07);
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-shadow: 0 4px 24px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04);
+  --card-radius: 18px;
+  --font-main: 'DM Sans', system-ui, -apple-system, sans-serif;
 }
-
 .analytics-view {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   background-color: hsl(var(--background));
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(139, 0, 0, 0.04) 0%, transparent 60%),
+    linear-gradient(180deg, hsl(210, 20%, 98%) 0%, hsl(214, 20%, 97%) 100%);
   color: hsl(var(--foreground));
-  font-family:
-    'Inter',
-    system-ui,
-    -apple-system,
-    sans-serif;
+  font-family: var(--font-main);
   overflow: hidden;
 }
 
 /* Mini Switcher for Cards */
 .mini-switcher {
   display: inline-flex;
-  background: rgba(0, 0, 0, 0.05);
-  padding: 2px;
-  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 3px;
+  border-radius: 10px;
   gap: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .mini-switcher button {
-  padding: 3px 10px;
+  padding: 4px 12px;
   font-size: 10px;
   font-weight: 700;
+  font-family: var(--font-main);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   border: none;
   background: transparent;
-  color: #64748b;
+  color: #94a3b8;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 7px;
   transition: all 0.2s ease;
 }
 
 .mini-switcher button.active {
   background: white;
   color: #8b0000;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.1),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
 }
 
 /* Page Header */
 .page-header {
   flex-shrink: 0;
-  padding: 1.5rem 2rem;
-  background: transparent;
-  border-bottom: 1px solid hsl(var(--border));
+  padding: 1.25rem 2rem;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 12px rgba(0, 0, 0, 0.04);
+  position: relative;
+  z-index: 10;
 }
 
 .header-inner {
@@ -1473,16 +1483,19 @@ onUnmounted(() => {
 
 .page-title {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
   color: hsl(var(--foreground));
+  font-family: var(--font-main);
 }
 
 .page-subtitle {
-  margin: 0.25rem 0 0;
-  font-size: 0.875rem;
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
   color: hsl(var(--muted-foreground));
+  font-weight: 400;
+  letter-spacing: 0.01em;
 }
 
 .header-actions {
@@ -1496,15 +1509,17 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #10b981; /* Emerald-500 */
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  padding: 0.3rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: var(--font-main);
+  color: #059669;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.18);
   border-radius: 9999px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.07em;
+  box-shadow: 0 1px 4px rgba(16, 185, 129, 0.1);
 }
 
 .live-dot {
@@ -1541,29 +1556,36 @@ onUnmounted(() => {
 }
 
 .filter-select {
-  padding: 0.5rem 2.5rem 0.5rem 1rem;
-  font-size: 0.875rem;
+  padding: 0.45rem 2.5rem 0.45rem 0.9rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  font-family: var(--font-main);
   color: hsl(var(--foreground));
-  background-color: hsl(var(--background));
-  border: 1px solid hsl(var(--border));
-  border-radius: 0.5rem;
+  background-color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
   cursor: pointer;
-  min-width: 160px;
+  min-width: 150px;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke-width='1.5' stroke='%2364748b'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M8.25 15L12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9' /%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.75rem center;
   background-size: 1rem;
-  transition: border-color 0.2s;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: all 0.2s ease;
 }
 
 .filter-select:hover {
-  border-color: hsl(var(--muted-foreground));
+  border-color: rgba(0, 0, 0, 0.18);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .filter-select:focus {
   outline: none;
-  border-color: hsl(var(--ring));
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
 }
 
 /* Sync Button */
@@ -1571,26 +1593,33 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 1rem;
+  padding: 0.45rem 1.1rem;
   font-size: 0.8125rem;
   font-weight: 600;
+  font-family: var(--font-main);
   color: white;
-  background: hsl(var(--primary));
+  background: linear-gradient(135deg, #8b0000 0%, #b91c1c 100%);
   border: none;
-  border-radius: 0.5rem;
+  border-radius: 10px;
   cursor: pointer;
+  letter-spacing: 0.01em;
   transition: all 0.2s ease;
-  box-shadow: 0 4px 12px rgba(139, 0, 0, 0.2);
+  box-shadow:
+    0 4px 14px rgba(139, 0, 0, 0.25),
+    0 1px 0 rgba(255, 255, 255, 0.15) inset;
 }
 
 .sync-button:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(139, 0, 0, 0.3);
-  filter: brightness(1.1);
+  box-shadow:
+    0 8px 20px rgba(139, 0, 0, 0.35),
+    0 1px 0 rgba(255, 255, 255, 0.15) inset;
+  filter: brightness(1.08);
 }
 
 .sync-button:active:not(:disabled) {
   transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(139, 0, 0, 0.2);
 }
 
 .sync-button:disabled {
@@ -1617,18 +1646,21 @@ onUnmounted(() => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 1rem 1rem;
+  padding: 1.5rem 1.5rem;
 }
 
 .analytics-scroll::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 .analytics-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 .analytics-scroll::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted));
-  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 99px;
+}
+.analytics-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .analytics-content {
@@ -1791,48 +1823,22 @@ onUnmounted(() => {
 
 /* Glass Card Component */
 .glass-card {
-  background: rgba(255, 255, 255, 0.45);
-  backdrop-filter: blur(25px) saturate(180%);
-  -webkit-backdrop-filter: blur(25px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.04),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
-  border-radius: 20px;
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 8px 32px rgba(0, 0, 0, 0.06),
+    0 2px 8px rgba(0, 0, 0, 0.04);
+  border-radius: var(--card-radius);
   padding: 1.5rem;
   position: relative;
   overflow: hidden;
   height: 100%;
   display: flex;
   flex-direction: column;
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.kpi-card {
-  border-left: 4px solid transparent;
-}
-
-.kpi-card:hover {
-  transform: translateY(-6px);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border-left-color: var(--card-theme-color);
-  background: rgba(255, 255, 255, 0.6);
-}
-
-.glass-card .lucide {
-  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.glass-card:hover .lucide {
-  transform: scale(1.1);
-}
-
-.text-xl {
-  font-size: 1.25rem;
-  line-height: 1.75rem;
-}
-.icon-badge {
-  display: none;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .glass-card::before {
@@ -1842,7 +1848,55 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.8), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.95) 50%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+.glass-card:hover {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 20px 48px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+
+.kpi-card {
+  border-left: 3px solid transparent;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.kpi-card:hover {
+  transform: translateY(-4px);
+  border-left-color: var(--card-theme-color, hsl(var(--primary)));
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 16px 40px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.glass-card .lucide {
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.glass-card:hover .lucide {
+  transform: scale(1.15) rotate(-4deg);
+}
+
+.text-xl {
+  font-size: 1.35rem;
+  line-height: 1.75rem;
+  font-family: var(--font-main);
+}
+
+.icon-badge {
+  display: none;
 }
 
 .kpi-card-padding {
@@ -1886,19 +1940,48 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-/* Chart Containers Container */
+/* Chart Containers */
 .h-\[280px\] {
   height: 280px;
+  flex: none;
 }
 .h-\[300px\] {
   height: 300px;
+  flex: none;
+}
+.h-\[240px\] {
+  height: 240px;
+  flex: none;
 }
 
 canvas {
-  /* Ensure canvas fits perfectly */
   display: block;
   width: 100% !important;
   height: 100% !important;
+}
+
+/* Chart card label upgrades */
+.glass-card h3 {
+  font-family: var(--font-main);
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: #0f172a;
+  margin: 0 0 0.4rem;
+}
+
+/* KPI stat numbers — monospaced for data clarity */
+.kpi-card .text-xl {
+  font-family: 'DM Mono', 'Fira Code', monospace;
+  font-size: 1.6rem !important;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  font-weight: 500;
+}
+
+/* Section gap */
+.section {
+  gap: 1.25rem;
 }
 
 /* Error/Loading States */
@@ -1906,11 +1989,13 @@ canvas {
   margin: 2rem auto;
   max-width: 800px;
   padding: 1rem 1.5rem;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  border-radius: 0.5rem;
-  color: #f87171;
+  background: rgba(239, 68, 68, 0.07);
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  border-radius: 12px;
+  color: #dc2626;
   text-align: center;
+  font-family: var(--font-main);
+  font-size: 0.875rem;
 }
 
 .access-denied {
@@ -1919,6 +2004,7 @@ canvas {
   justify-content: center;
   padding: 4rem;
   color: hsl(var(--muted-foreground));
+  font-family: var(--font-main);
 }
 
 /* High Value Alerts */
@@ -1926,10 +2012,12 @@ canvas {
   display: block;
 }
 .high-value-banner {
-  background: linear-gradient(145deg, rgba(139, 0, 0, 0.05) 0%, rgba(255, 255, 255, 0.7) 100%);
-  border: 1px solid rgba(139, 0, 0, 0.1);
-  border-radius: 0.75rem;
+  background: linear-gradient(145deg, rgba(139, 0, 0, 0.04) 0%, rgba(255, 255, 255, 0.72) 100%);
+  border: 1px solid rgba(139, 0, 0, 0.09);
+  border-radius: var(--card-radius);
   padding: 1.5rem;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 .banner-header {
   display: flex;

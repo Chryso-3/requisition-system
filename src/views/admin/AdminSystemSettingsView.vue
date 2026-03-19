@@ -5,19 +5,19 @@ import { updateSystemConfig } from '@/services/adminService'
 import {
   Save,
   AlertCircle,
+  ShieldCheck,
   Megaphone,
-  Shield,
-  UserPlus,
   Loader2,
   CheckCircle2,
+  Settings,
 } from 'lucide-vue-next'
 
 const systemStore = useSystemStore()
 const loading = ref(false)
 const saved = ref(false)
 const error = ref(null)
+const activeSection = ref('access')
 
-// Local form state
 const form = ref({
   registrationEnabled: true,
   maintenanceMode: false,
@@ -29,10 +29,7 @@ const form = ref({
 })
 
 onMounted(async () => {
-  if (!systemStore.initialized) {
-    await systemStore.fetchConfig()
-  }
-  // Clone current config into form
+  if (!systemStore.initialized) await systemStore.fetchConfig()
   form.value = JSON.parse(JSON.stringify(systemStore.config))
 })
 
@@ -40,10 +37,8 @@ async function handleSave() {
   loading.value = true
   saved.value = false
   error.value = null
-
   try {
     await updateSystemConfig(form.value)
-    // Refresh global store
     await systemStore.fetchConfig()
     saved.value = true
     setTimeout(() => {
@@ -55,509 +50,587 @@ async function handleSave() {
     loading.value = false
   }
 }
+
+const navItems = [
+  { id: 'access', label: 'Access Control', icon: ShieldCheck },
+  { id: 'comms', label: 'Communications', icon: Megaphone },
+]
 </script>
 
 <template>
-  <div class="admin-settings-view">
-    <header class="page-header">
-      <div>
-        <h1 class="page-title">System Settings</h1>
-        <p class="page-subtitle">Configure global parameters and site-wide notifications</p>
+  <div class="page-root">
+    <div class="topbar">
+      <div class="topbar-left">
+        <Settings :size="15" class="topbar-icon" />
+        <span class="topbar-title">System Settings</span>
       </div>
-      <div class="header-actions">
-        <div v-if="saved" class="save-success">
-          <CheckCircle2 :size="16" />
-          Settings Saved
-        </div>
-        <button
-          @click="handleSave"
-          :disabled="loading"
-          class="btn-save"
-          :class="{ loading: loading }"
-        >
-          <Loader2 v-if="loading" class="animate-spin" :size="18" />
-          <Save v-else :size="18" />
-          <span>{{ loading ? 'Saving...' : 'Save Changes' }}</span>
+      <div class="topbar-right">
+        <transition name="fade">
+          <span v-if="saved" class="badge-saved"> <CheckCircle2 :size="13" /> Saved </span>
+        </transition>
+        <button @click="handleSave" :disabled="loading" class="btn-primary">
+          <Loader2 v-if="loading" :size="14" class="spin" />
+          <Save v-else :size="14" />
+          {{ loading ? 'Saving…' : 'Save changes' }}
         </button>
       </div>
-    </header>
-
-    <div v-if="error" class="error-alert">
-      <AlertCircle :size="18" />
-      {{ error }}
     </div>
 
-    <div class="settings-grid">
-      <!-- Access Control -->
-      <section class="glass-card elite-card animate-staggered" style="--order: 0">
-        <div class="section-header-elite">
-          <div class="icon-orb-elite blue-elite">
-            <Shield :size="22" />
-          </div>
-          <div>
-            <h2 class="section-title-elite">Access Control</h2>
-            <p class="section-desc-elite">Manage system availability and user registration</p>
-          </div>
-        </div>
+    <div class="layout">
+      <nav class="sidebar">
+        <p class="sidebar-label">Configuration</p>
+        <button
+          v-for="item in navItems"
+          :key="item.id"
+          class="nav-item"
+          :class="{ 'nav-item--active': activeSection === item.id }"
+          @click="activeSection = item.id"
+        >
+          <component :is="item.icon" :size="15" />
+          {{ item.label }}
+        </button>
+      </nav>
 
-        <div class="setting-item-elite">
-          <div class="setting-info-elite">
-            <h3 class="setting-label-elite">Global Maintenance Mode</h3>
-            <p class="setting-help-elite">
-              Restrict access to Super Admins only. Other users will see a maintenance page.
-            </p>
-          </div>
-          <label class="elite-switch">
-            <input type="checkbox" v-model="form.maintenanceMode" />
-            <span class="elite-slider"></span>
-          </label>
-        </div>
-
-        <div class="setting-divider-elite"></div>
-
-        <div class="setting-item-elite">
-          <div class="setting-info-elite">
-            <h3 class="setting-label-elite">Public Registration</h3>
-            <p class="setting-help-elite">
-              Allow new users to create accounts via the registration page.
-            </p>
-          </div>
-          <label class="elite-switch">
-            <input type="checkbox" v-model="form.registrationEnabled" />
-            <span class="elite-slider"></span>
-          </label>
-        </div>
-      </section>
-
-      <!-- Communications -->
-      <section class="glass-card elite-card animate-staggered" style="--order: 1">
-        <div class="section-header-elite">
-          <div class="icon-orb-elite amber-elite">
-            <Megaphone :size="22" />
-          </div>
-          <div>
-            <h2 class="section-title-elite">System Communications</h2>
-            <p class="section-desc-elite">Broadcast messages to all active users</p>
-          </div>
-        </div>
-
-        <div class="setting-item-elite">
-          <div class="setting-info-elite">
-            <h3 class="setting-label-elite">Announcement Banner</h3>
-            <p class="setting-help-elite">Toggle the visibility of the global notification bar.</p>
-          </div>
-          <label class="elite-switch">
-            <input type="checkbox" v-model="form.announcement.active" />
-            <span class="elite-slider"></span>
-          </label>
-        </div>
-
-        <div class="form-group mt-6">
-          <label class="input-label-elite">Banner Message</label>
-          <textarea
-            v-model="form.announcement.text"
-            placeholder="e.g. Scheduled downtime tomorrow at 8:00 AM"
-            class="elite-textarea"
-            :disabled="!form.announcement.active"
-          ></textarea>
-        </div>
-
-        <div class="form-group mt-4">
-          <label class="input-label-elite">Banner Style Theme</label>
-          <div class="elite-theme-picker">
-            <label class="elite-theme-option">
-              <input type="radio" value="info" v-model="form.announcement.type" />
-              <div class="elite-theme-preview info-elite">
-                <div class="elite-radio-dot"></div>
-                Informational Blue
+      <main class="content">
+        <transition name="fade" mode="out-in">
+          <div v-if="activeSection === 'access'" key="access">
+            <div class="section-head">
+              <h2 class="section-title">Access Control</h2>
+              <p class="section-desc">Manage system availability and user registration settings.</p>
+            </div>
+            <transition name="slide-down">
+              <div v-if="error" class="error-bar"><AlertCircle :size="14" /> {{ error }}</div>
+            </transition>
+            <div class="card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">Maintenance Mode</div>
+                  <div class="setting-help">
+                    Restricts access to super admins only. Other users are redirected to a
+                    maintenance page.
+                  </div>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.maintenanceMode" />
+                  <span class="track"><span class="thumb" /></span>
+                </label>
               </div>
-            </label>
-            <label class="elite-theme-option">
-              <input type="radio" value="warning" v-model="form.announcement.type" />
-              <div class="elite-theme-preview warning-elite">
-                <div class="elite-radio-dot"></div>
-                Urgent Amber
+              <div class="row-sep" />
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">Public Registration</div>
+                  <div class="setting-help">
+                    Allow visitors to create new accounts through the public registration page.
+                  </div>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.registrationEnabled" />
+                  <span class="track"><span class="thumb" /></span>
+                </label>
               </div>
-            </label>
-            <label class="elite-theme-option">
-              <input type="radio" value="success" v-model="form.announcement.type" />
-              <div class="elite-theme-preview success-elite">
-                <div class="elite-radio-dot"></div>
-                Positive Emerald
-              </div>
-            </label>
+            </div>
           </div>
-        </div>
-      </section>
+
+          <div v-else-if="activeSection === 'comms'" key="comms">
+            <div class="section-head">
+              <h2 class="section-title">System Communications</h2>
+              <p class="section-desc">
+                Broadcast announcements and notifications to all active users.
+              </p>
+            </div>
+            <transition name="slide-down">
+              <div v-if="error" class="error-bar"><AlertCircle :size="14" /> {{ error }}</div>
+            </transition>
+            <div class="card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">Announcement Banner</div>
+                  <div class="setting-help">
+                    Display a system-wide notification bar at the top of every page.
+                  </div>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.announcement.active" />
+                  <span class="track"><span class="thumb" /></span>
+                </label>
+              </div>
+              <div class="row-sep" />
+              <div class="field-block">
+                <label class="field-label">Banner message</label>
+                <textarea
+                  v-model="form.announcement.text"
+                  class="field-textarea"
+                  :disabled="!form.announcement.active"
+                  placeholder="e.g. Scheduled downtime tomorrow at 8:00 AM UTC"
+                  rows="3"
+                />
+              </div>
+              <div class="row-sep" />
+              <div class="field-block">
+                <label class="field-label">Banner style</label>
+                <div class="style-grid">
+                  <label
+                    v-for="opt in [
+                      { value: 'info', label: 'Informational', cls: 'opt--blue' },
+                      { value: 'warning', label: 'Urgent', cls: 'opt--amber' },
+                      { value: 'success', label: 'Positive', cls: 'opt--green' },
+                    ]"
+                    :key="opt.value"
+                    class="style-opt"
+                    :class="[opt.cls, { 'style-opt--on': form.announcement.type === opt.value }]"
+                  >
+                    <input type="radio" :value="opt.value" v-model="form.announcement.type" />
+                    <span class="style-pip" />
+                    {{ opt.label }}
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </transition>
+      </main>
     </div>
   </div>
 </template>
 
 <style scoped>
-.admin-settings-view {
-  padding: 0.5rem 2rem 2rem; /* Balanced horizontal padding */
-  max-width: 1200px; /* Better breadth for Compact Elite */
-  margin: 0 auto;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
-.page-header {
+.page-root {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  color: #18181b;
+  -webkit-font-smoothing: antialiased;
+  background: #f7f7f8;
+  min-height: 100vh;
+}
+
+/* ── Topbar ─────────────────────────────────── */
+.topbar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 1.5rem;
+  height: 52px;
+  padding: 0 1.5rem;
+  background: #fff;
+  border-bottom: 1px solid #e4e4e7;
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
-.page-title {
-  font-size: 1.875rem;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  color: #0f172a;
-}
-
-.page-subtitle {
-  color: #64748b;
-  font-size: 0.9375rem;
-  margin-top: 0.25rem;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-}
-
-.btn-save {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-  color: white;
-  border: none;
-  padding: 0.75rem 1.25rem;
-  border-radius: 0.75rem;
-  font-weight: 700;
-  font-size: 0.875rem;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-}
-
-.btn-save:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-  filter: brightness(1.1);
-}
-
-.btn-save:active {
-  transform: translateY(0);
-}
-
-.btn-save:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.save-success {
+.topbar-left {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: #10b981;
+}
+.topbar-icon {
+  color: #71717a;
+}
+.topbar-title {
   font-size: 0.875rem;
   font-weight: 600;
-  animation: slideInRight 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: -0.01em;
 }
-
-@keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.error-alert {
-  background: #fef2f2;
-  border: 1px solid #fee2e2;
-  color: #ef4444;
-  padding: 1rem;
-  border-radius: 0.75rem;
-  margin-bottom: 2rem;
+.topbar-right {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  font-size: 0.875rem;
+}
+
+/* ── Save button ────────────────────────────── */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.875rem;
+  background: #18181b;
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.8125rem;
   font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    transform 0.1s;
+}
+.btn-primary:hover:not(:disabled) {
+  background: #27272a;
+}
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-  gap: 2rem;
+/* ── Saved badge ────────────────────────────── */
+.badge-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #16a34a;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
 }
 
-.glass-card.elite-card {
-  background: rgba(255, 255, 255, 0.4);
-  backdrop-filter: blur(25px) saturate(180%);
-  -webkit-backdrop-filter: blur(25px) saturate(180%);
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  padding: 2.5rem;
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.04),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.glass-card.elite-card:hover {
-  transform: translateY(-6px);
-  background: rgba(255, 255, 255, 0.55);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-}
-
-.section-header-elite {
+/* ── Layout ─────────────────────────────────── */
+.layout {
   display: flex;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.75rem 2rem;
+  gap: 0;
   align-items: flex-start;
-  gap: 1.25rem;
-  margin-bottom: 2.5rem;
 }
 
-.icon-orb-elite {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+/* ── Sidebar ─────────────────────────────────── */
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 52px;
+  padding: 0 1.5rem 0 0;
+  border-right: 1px solid #e4e4e7;
+}
+
+.sidebar-label {
+  font-size: 0.69rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #a1a1aa;
+  padding: 0 0.5rem;
+  margin-bottom: 0.375rem;
+}
+
+.nav-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.1);
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: none;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: #52525b;
+  cursor: pointer;
+  transition: background 0.1s;
+  text-align: left;
+  margin-bottom: 1px;
+}
+.nav-item:hover {
+  background: #ededef;
+  color: #18181b;
+}
+.nav-item--active {
+  background: #18181b;
+  color: #fff;
+}
+.nav-item--active:hover {
+  background: #27272a;
+  color: #fff;
 }
 
-.icon-orb-elite.blue-elite {
-  background: linear-gradient(135deg, #0ea5e9, #0284c7);
-  color: white;
+/* ── Content area ───────────────────────────── */
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0 0 2rem;
 }
 
-.icon-orb-elite.amber-elite {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  color: white;
+.section-head {
+  margin-bottom: 1.25rem;
 }
 
-.section-title-elite {
-  font-size: 1.125rem;
-  font-weight: 800;
-  color: #0f172a;
-  letter-spacing: -0.01em;
+.section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #18181b;
+  margin-bottom: 0.25rem;
 }
 
-.section-desc-elite {
-  font-size: 0.85rem;
-  color: #64748b;
-  margin-top: 0.125rem;
+.section-desc {
+  font-size: 0.8125rem;
+  color: #71717a;
+  line-height: 1.5;
 }
 
-.setting-item-elite {
+/* ── Card ───────────────────────────────────── */
+.card {
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 2rem;
+  padding: 1.1rem 1.25rem;
 }
 
-.setting-label-elite {
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: #1e293b;
+.setting-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #18181b;
+  margin-bottom: 0.2rem;
 }
 
-.setting-help-elite {
-  font-size: 0.8125rem;
-  color: #94a3b8;
-  margin-top: 0.25rem;
+.setting-help {
+  font-size: 0.8rem;
+  color: #a1a1aa;
   line-height: 1.5;
 }
 
-.setting-divider-elite {
+.row-sep {
   height: 1px;
-  background: rgba(0, 0, 0, 0.05);
-  margin: 2rem 0;
+  background: #f4f4f5;
 }
 
-/* Elite Toggle Switch */
-.elite-switch {
+.field-block {
+  padding: 1.1rem 1.25rem;
+}
+
+.field-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #52525b;
+  margin-bottom: 0.45rem;
+}
+
+.field-textarea {
+  display: block;
+  width: 100%;
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  padding: 0.65rem 0.875rem;
+  font-family: inherit;
+  font-size: 0.875rem;
+  color: #18181b;
+  resize: vertical;
+  line-height: 1.5;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.field-textarea::placeholder {
+  color: #d4d4d8;
+}
+.field-textarea:focus {
+  outline: none;
+  border-color: #a1a1aa;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.05);
+}
+.field-textarea:disabled {
+  background: #f4f4f5;
+  color: #a1a1aa;
+  cursor: not-allowed;
+}
+
+/* ── Style picker ────────────────────────────── */
+.style-grid {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.style-opt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #e4e4e7;
+  background: #fafafa;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
+}
+.style-opt input {
+  display: none;
+}
+
+.style-pip {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+
+.opt--blue {
+  color: #2563eb;
+}
+.opt--amber {
+  color: #d97706;
+}
+.opt--green {
+  color: #16a34a;
+}
+
+.style-opt--on.opt--blue {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.style-opt--on.opt--amber {
+  background: #fffbeb;
+  border-color: #fcd34d;
+}
+.style-opt--on.opt--green {
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+.style-opt--on .style-pip {
+  background: currentColor;
+}
+
+/* ── Toggle ──────────────────────────────────── */
+.toggle {
   position: relative;
-  display: inline-block;
-  width: 48px;
-  height: 26px;
+  display: inline-flex;
+  cursor: pointer;
   flex-shrink: 0;
 }
-
-.elite-switch input {
+.toggle input {
+  position: absolute;
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-.elite-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: #e2e8f0;
-  transition: 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  border-radius: 26px;
+.track {
+  display: block;
+  width: 40px;
+  height: 22px;
+  background: #d4d4d8;
+  border-radius: 999px;
+  position: relative;
+  transition: background 0.18s;
 }
 
-.elite-slider:before {
+.thumb {
   position: absolute;
-  content: '';
-  height: 20px;
-  width: 20px;
-  left: 3px;
-  bottom: 3px;
-  background-color: white;
-  transition: 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: #fff;
   border-radius: 50%;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-input:checked + .elite-slider {
-  background-color: #0f172a;
+.toggle input:checked ~ .track {
+  background: #18181b;
 }
-input:checked + .elite-slider:before {
-  transform: translateX(22px);
+.toggle input:checked ~ .track .thumb {
+  transform: translateX(18px);
 }
-
-/* Form Elements */
-.input-label-elite {
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: #475569;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 0.5rem;
+.toggle:hover .track {
+  background: #a1a1aa;
+}
+.toggle input:checked:hover ~ .track {
+  background: #27272a;
 }
 
-.elite-textarea {
-  width: 100%;
-  min-height: 110px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  border-radius: 12px;
-  padding: 1rem;
-  font-family: inherit;
-  font-size: 0.95rem;
-  color: #1e293b;
-  resize: vertical;
-  transition: all 0.2s;
-}
-
-.elite-textarea:focus {
-  outline: none;
-  border-color: #0f172a;
-  background: white;
-  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.05);
-}
-
-.elite-textarea:disabled {
-  background: rgba(241, 245, 249, 0.5);
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.elite-theme-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.elite-theme-option input {
-  display: none;
-}
-
-.elite-theme-preview {
+/* ── Error ───────────────────────────────────── */
+.error-bar {
   display: flex;
   align-items: center;
-  gap: 0.875rem;
-  padding: 0.875rem 1.25rem;
-  border-radius: 12px;
-  font-size: 0.875rem;
-  font-weight: 700;
-  border: 1px solid transparent;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  cursor: pointer;
+  gap: 0.5rem;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #be123c;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.65rem 0.875rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
 }
 
-.elite-radio-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid white;
-  background: transparent;
-  transition: all 0.2s;
+/* ── Spinner ─────────────────────────────────── */
+.spin {
+  animation: spin 0.75s linear infinite;
 }
-
-.info-elite {
-  background: rgba(14, 165, 233, 0.08);
-  color: #0369a1;
-}
-.warning-elite {
-  background: rgba(245, 158, 11, 0.08);
-  color: #b45309;
-}
-.success-elite {
-  background: rgba(16, 185, 129, 0.08);
-  color: #047857;
-}
-
-.elite-theme-option input:checked + .info-elite {
-  border-color: #0369a1;
-  background: rgba(14, 165, 233, 0.15);
-}
-.elite-theme-option input:checked + .warning-elite {
-  border-color: #b45309;
-  background: rgba(245, 158, 11, 0.15);
-}
-.elite-theme-option input:checked + .success-elite {
-  border-color: #047857;
-  background: rgba(16, 185, 129, 0.15);
-}
-
-.elite-theme-option input:checked + .elite-theme-preview .elite-radio-dot {
-  background: currentColor;
-  transform: scale(1.1);
-}
-
-.mt-6 {
-  margin-top: 1.5rem;
-}
-.mt-4 {
-  margin-top: 1rem;
-}
-
-.animate-staggered {
-  opacity: 0;
-  animation: slideUpElite 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  animation-delay: calc(var(--order) * 0.1s);
-}
-
-@keyframes slideUpElite {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
+@keyframes spin {
   to {
-    opacity: 1;
-    transform: translateY(0);
+    transform: rotate(360deg);
   }
 }
 
+/* ── Transitions ─────────────────────────────── */
+.fade-enter-active,
+.fade-leave-active {
+  transition:
+    opacity 0.13s,
+    transform 0.13s;
+}
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+.slide-down-enter-active {
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+}
+.slide-down-enter-from {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* ── Responsive ──────────────────────────────── */
 @media (max-width: 640px) {
-  .settings-grid {
-    grid-template-columns: 1fr;
+  .layout {
+    flex-direction: column;
+    padding: 1rem;
+    gap: 1.25rem;
+  }
+  .sidebar {
+    width: 100%;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid #e4e4e7;
+    padding: 0 0 1rem 0;
+  }
+  .content {
+    padding: 0;
+  }
+  .style-grid {
+    flex-direction: column;
   }
 }
 </style>

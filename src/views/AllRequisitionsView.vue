@@ -499,7 +499,8 @@ onUnmounted(() => {
   width: 100%;
   padding: 0.75rem 1.5rem 1.25rem;
   background: var(--jinja-bg);
-  height: calc(100vh - 64px);
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -723,10 +724,9 @@ onUnmounted(() => {
 
 .table-container {
   flex: 1;
-  overflow-y: scroll;
+  overflow-y: auto;
   scrollbar-gutter: stable;
   min-height: 0;
-  max-height: calc(100vh - 360px);
 }
 
 /* Custom Scrollbar */

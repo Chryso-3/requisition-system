@@ -678,7 +678,10 @@ onUnmounted(() => {
 .archive-view {
   padding: 0.75rem 2rem 2rem;
   background: #f1f5f9;
-  min-height: 100vh;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
   font-family: 'Inter', system-ui, sans-serif;
   color: #0f172a;
   display: flex;
@@ -1014,7 +1017,6 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   overflow-x: auto;
-  max-height: calc(100vh - 290px);
 }
 
 .compact-table {

@@ -7,8 +7,10 @@ import {
   REQUISITION_PAGE_SIZE,
   markRequisitionCanvassed,
   generateCanvassNo,
+  upsertRequisitionQuote,
 } from '@/services/requisitionService'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
+import { compressImageToBase64 } from '@/utils/imageUtils'
 import { REQUISITION_STATUS, USER_ROLES, CANVASS_STATUS } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
 import PaginationComponent from '@/components/PaginationComponent.vue'
@@ -83,6 +85,11 @@ const canvassNumber = ref('')
 const canvassDate = ref('')
 const supplier = ref('')
 const canvassItems = ref([])
+const selectedQuotes = ref([
+  { file: null, base64: null, name: '' },
+  { file: null, base64: null, name: '' },
+  { file: null, base64: null, name: '' },
+])
 
 async function openMarkCanvassed(r) {
   modalCanvass.value = r
@@ -112,6 +119,12 @@ function closeCanvassModal() {
   modalCanvass.value = null
   canvassNumber.value = ''
   actionError.value = ''
+  supplier.value = ''
+  selectedQuotes.value = [
+    { file: null, base64: null, name: '' },
+    { file: null, base64: null, name: '' },
+    { file: null, base64: null, name: '' },
+  ]
 }
 async function saveMarkCanvassed() {
   if (!modalCanvass.value) return
@@ -119,15 +132,34 @@ async function saveMarkCanvassed() {
     actionError.value = 'Missing digital signature. Please set it up in your Profile.'
     return
   }
-  if (!supplier.value.trim()) {
-    actionError.value = 'Please enter the winning supplier.'
+
+  // Validate 3 quotes
+  const quotesCount = selectedQuotes.value.filter((q) => q.file || q.base64).length
+  if (quotesCount < 3) {
+    actionError.value = 'Please upload all 3 supplier quotes/images before submitting.'
     return
   }
+
   actionLoading.value = true
   actionError.value = ''
   try {
     const user = authStore.user
-    await markRequisitionCanvassed(modalCanvass.value.id, {
+    const requisitionId = modalCanvass.value.id
+
+    // 1. Upload/Compress quotes first
+    for (let i = 0; i < selectedQuotes.value.length; i++) {
+      const q = selectedQuotes.value[i]
+      if (q.file && !q.base64) {
+        q.base64 = await compressImageToBase64(q.file)
+      }
+      await upsertRequisitionQuote(requisitionId, i, {
+        name: q.name || q.file?.name || `Quote ${i + 1}`,
+        base64: q.base64,
+      })
+    }
+
+    // 2. Mark canvassed
+    await markRequisitionCanvassed(requisitionId, {
       canvassNumber: canvassNumber.value.trim() || undefined,
       canvassDate: canvassDate.value ? new Date(canvassDate.value + 'T12:00:00') : new Date(),
       canvassBy: user
@@ -136,13 +168,45 @@ async function saveMarkCanvassed() {
       supplier: supplier.value.trim() || undefined,
       items: canvassItems.value,
       signatureData: authStore?.userProfile?.signatureData,
+      hasQuotes: true,
     })
     closeCanvassModal()
   } catch (e) {
+    console.error('Save canvass error:', e)
     actionError.value = e?.message || 'Failed to submit canvass to BAC.'
   } finally {
     actionLoading.value = false
   }
+}
+
+async function handleQuoteFile(e, index) {
+  const file = e.target.files[0]
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    actionError.value = 'Please upload image files only (JPG, PNG).'
+    return
+  }
+
+  actionLoading.value = true
+  try {
+    // Preview immediately, compress on save to avoid UI lag
+    selectedQuotes.value[index].file = file
+    selectedQuotes.value[index].name = file.name
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      selectedQuotes.value[index].base64 = ev.target.result
+    }
+    reader.readAsDataURL(file)
+  } catch (err) {
+    actionError.value = 'Failed to process image.'
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+function clearQuote(index) {
+  selectedQuotes.value[index] = { file: null, base64: null, name: '' }
 }
 
 async function loadMore() {
@@ -350,13 +414,41 @@ onUnmounted(() => {
 
             <!-- Supplier -->
             <div class="co-field">
-              <label class="co-label">Winning Supplier <span class="co-required">*</span></label>
+              <label class="co-label">Winning Supplier (Optional)</label>
               <input
                 v-model="supplier"
                 type="text"
-                placeholder="Enter supplier / company name"
+                placeholder="BAC will decide if left blank"
                 class="co-input"
               />
+            </div>
+
+            <!-- Quote Uploads -->
+            <div class="co-divider"></div>
+            <p class="co-section-title">Supplier Quotes (Required 3) <span class="co-required">*</span></p>
+            <div class="co-quote-grid">
+              <div v-for="(q, idx) in selectedQuotes" :key="idx" class="co-quote-slot">
+                <input
+                  :id="'quote-file-' + idx"
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  @change="handleQuoteFile($event, idx)"
+                />
+                <template v-if="!q.base64">
+                  <label :for="'quote-file-' + idx" class="co-quote-placeholder">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <span>Quote {{ idx + 1 }}</span>
+                  </label>
+                </template>
+                <template v-else>
+                  <div class="co-quote-preview-wrap">
+                    <img :src="q.base64" alt="Preview" class="co-quote-preview" />
+                    <button class="co-quote-remove" @click="clearQuote(idx)">&times;</button>
+                    <div class="co-quote-name">{{ q.name }}</div>
+                  </div>
+                </template>
+              </div>
             </div>
 
             <!-- CO Number + Date -->
@@ -647,12 +739,88 @@ onUnmounted(() => {
   color: #94a3b8;
 }
 
-.co-table-wrap {
-  border: 1px solid #e2e8f0;
+/* Quote Grid */
+.co-quote-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.co-quote-slot {
+  aspect-ratio: 4 / 3;
+  border: 2px dashed #e2e8f0;
   border-radius: 12px;
   overflow: hidden;
-  max-height: 230px;
-  overflow-y: auto;
+  position: relative;
+  background: #f8fafc;
+  transition: all 0.2s;
+}
+.co-quote-slot:hover {
+  border-color: #1d4ed8;
+  background: #f1f5f9;
+}
+
+.co-quote-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.co-quote-placeholder svg {
+  opacity: 0.5;
+}
+
+.co-quote-preview-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+.co-quote-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.co-quote-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6);
+  color: #fff;
+  border: none;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.co-quote-remove:hover {
+  background: #ef4444;
+}
+.co-quote-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 0.65rem;
+  padding: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
 }
 
 .co-table {
@@ -773,7 +941,7 @@ onUnmounted(() => {
   width: 100%;
   padding: 0.75rem 2rem 1.75rem;
   background: var(--jinja-bg);
-  height: calc(100vh - 64px);
+  flex: 1; min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;

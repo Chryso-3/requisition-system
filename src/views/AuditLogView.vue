@@ -1338,7 +1338,7 @@ onMounted(load)
   width: 100%;
   padding: 0.75rem 1.5rem 1.25rem;
   background: var(--jinja-bg);
-  height: calc(100vh - 64px);
+  flex: 1; min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

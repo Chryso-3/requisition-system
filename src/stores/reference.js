@@ -64,7 +64,7 @@ export const useReferenceStore = defineStore('reference', () => {
 
   function optimisticallyAddSupplier(supplierData) {
     const tempId = 'temp-' + Date.now()
-    const newSupplier = { ...supplierData, id: tempId, isActive: true, isOptimistic: true }
+    const newSupplier = { ...supplierData, id: tempId, isActive: true, isNew: true, isOptimistic: true }
     suppliers.value.push(newSupplier)
     return tempId
   }

@@ -295,7 +295,7 @@ watch(totalRows, (newTotal) => {
   width: 100%;
   padding: 1.5rem 1.75rem;
   background: var(--jinja-bg);
-  height: calc(100vh - 64px);
+  flex: 1; min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

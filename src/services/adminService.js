@@ -113,35 +113,38 @@ export async function updateSystemConfig(updates) {
 }
 
 /**
- * Get current counters for RF, Canvass, and PO
+ * Get current counters for RF, Canvass, PO, and PBAC for a specific year
  */
-export async function getCounters() {
-  const year = new Date().getFullYear()
+export async function getCounters(yearInput) {
+  const year = yearInput || new Date().getFullYear()
   const refs = {
-    rf: doc(db, 'counters', 'requisitionRf'),
+    rf: doc(db, 'counters', 'requisitionRf'), // Keep as global for now, but referenced with year in UI
     canvass: doc(db, 'counters', `canvassNo_${year}`),
     po: doc(db, 'counters', `poNo_${year}`),
+    pbac: doc(db, 'counters', `pbacFormNo_${year}`),
   }
 
-  const [rfSnap, canvassSnap, poSnap] = await Promise.all([
+  const [rfSnap, canvassSnap, poSnap, pbacSnap] = await Promise.all([
     getDoc(refs.rf),
     getDoc(refs.canvass),
     getDoc(refs.po),
+    getDoc(refs.pbac),
   ])
 
   return {
     rf: rfSnap.exists() ? rfSnap.data().lastNo || 0 : 0,
     canvass: canvassSnap.exists() ? canvassSnap.data().lastNo || 0 : 0,
     po: poSnap.exists() ? poSnap.data().lastNo || 0 : 0,
+    pbac: pbacSnap.exists() ? pbacSnap.data().lastNo || 0 : 0,
     year,
   }
 }
 
 /**
- * Manually override a counter value
+ * Manually override a counter value for a specific year
  */
-export async function setCounter(type, value) {
-  const year = new Date().getFullYear()
+export async function setCounter(type, value, yearInput) {
+  const year = yearInput || new Date().getFullYear()
   let ref
   if (type === 'rf') {
     ref = doc(db, 'counters', 'requisitionRf')
@@ -149,6 +152,8 @@ export async function setCounter(type, value) {
     ref = doc(db, 'counters', `canvassNo_${year}`)
   } else if (type === 'po') {
     ref = doc(db, 'counters', `poNo_${year}`)
+  } else if (type === 'pbac') {
+    ref = doc(db, 'counters', `pbacFormNo_${year}`)
   } else {
     throw new Error('Invalid counter type')
   }
@@ -198,6 +203,7 @@ export async function addSupplier(data) {
   await addDoc(ref, {
     ...data,
     isActive: true,
+    isNew: true, // Flag as new for admin review
     createdAt: serverTimestamp(),
   })
 }

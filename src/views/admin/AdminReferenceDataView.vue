@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import * as XLSX from 'xlsx'
 import {
   addDepartment,
@@ -16,14 +16,18 @@ import {
   Search,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   Loader2,
   Trash2,
   Check,
   Edit2,
   Upload,
+  Info,
+  X,
 } from 'lucide-vue-next'
 
 const activeTab = ref('departments') // 'departments' or 'suppliers'
+const showSupplierLegend = ref(false)
 const referenceStore = useReferenceStore()
 const departments = computed(() => referenceStore.departments)
 const suppliers = computed(() => referenceStore.suppliers)
@@ -62,7 +66,7 @@ const filteredDepartments = computed(() => {
 })
 
 const filteredSuppliers = computed(() => {
-  let list = suppliers.value
+  let list = [...suppliers.value]
   
   if (statusFilter.value !== 'all') {
     const isActive = statusFilter.value === 'active'
@@ -80,8 +84,20 @@ const filteredSuppliers = computed(() => {
         (s.address2 || '').toLowerCase().includes(k),
     )
   }
-  return list
+  
+  // Pinned "New" or "Incomplete" suppliers first, then alphabetical
+  return list.sort((a, b) => {
+    const aNeedsReview = !!a.isNew || (!a.contactPerson && !a.phone && !a.email)
+    const bNeedsReview = !!b.isNew || (!b.contactPerson && !b.phone && !b.email)
+    
+    if (aNeedsReview !== bNeedsReview) return aNeedsReview ? -1 : 1
+    return (a.name || '').localeCompare(b.name || '')
+  })
 })
+
+const newSuppliersCount = computed(() => 
+  suppliers.value.filter((s) => s.isNew || (!s.contactPerson && !s.phone && !s.email)).length
+)
 
 const totalPages = computed(() => Math.ceil(filteredSuppliers.value.length / pageSize.value) || 1)
 const paginatedSuppliers = computed(() => {
@@ -127,7 +143,8 @@ async function handleAddSupplier() {
   
   try {
     if (isEdit) {
-      await updateSupplier(existingId, data)
+      // Clear isNew flag when details are updated
+      await updateSupplier(existingId, { ...data, isNew: false })
     } else {
       await addSupplier(data)
     }
@@ -135,6 +152,15 @@ async function handleAddSupplier() {
   } catch (err) {
     if (tempId) referenceStore.rollbackSupplier(tempId)
     alert('Error saving supplier: ' + err.message)
+  }
+}
+
+async function markSupplierReviewed(s) {
+  try {
+    await updateSupplier(s.id, { isNew: false })
+    await referenceStore.fetchSuppliers(true)
+  } catch (err) {
+    console.error('Failed to mark as reviewed:', err)
   }
 }
 
@@ -274,7 +300,22 @@ watch([searchKey, statusFilter, activeTab], () => {
   currentPage.value = 1
 })
 
-onMounted(fetchData)
+function handleClickOutside(e) {
+  if (showSupplierLegend.value && 
+      !e.target.closest('.registry-legend-popover') && 
+      !e.target.closest('.btn-legend-toggle')) {
+    showSupplierLegend.value = false
+  }
+}
+
+onMounted(() => {
+  fetchData()
+  window.addEventListener('click', handleClickOutside)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('click', handleClickOutside)
+})
 </script>
 
 <template>
@@ -310,6 +351,16 @@ onMounted(fetchData)
         />
         <button
           v-if="activeTab === 'suppliers'"
+          class="btn-legend-toggle"
+          :class="{ active: showSupplierLegend }"
+          @click="showSupplierLegend = !showSupplierLegend"
+        >
+          <Info :size="18" />
+          <span>Legend</span>
+        </button>
+
+        <button
+          v-if="activeTab === 'suppliers'"
           class="btn-import glint"
           @click="triggerExcelImport"
         >
@@ -343,6 +394,60 @@ onMounted(fetchData)
         <span class="count-chip">{{ suppliers.length }}</span>
       </button>
     </div>
+
+    <!-- Supplier Registry Legend (Styled after "How to Read the Log") -->
+    <Transition name="legend-fade">
+      <div v-if="activeTab === 'suppliers' && showSupplierLegend" class="registry-legend-popover" @click.stop>
+        <div class="legend-popover-header">
+          <div class="legend-header-main">
+            <h3 class="legend-popover-title">SUPPLIER REGISTRY GUIDE</h3>
+            <span v-if="newSuppliersCount > 0" class="pending-popover-badge">
+              {{ newSuppliersCount }} Review{{ newSuppliersCount > 1 ? 's' : '' }} Pending
+            </span>
+          </div>
+          <button class="btn-close-legend" @click="showSupplierLegend = false">
+            <X :size="16" />
+          </button>
+        </div>
+        
+        <div class="legend-popover-content">
+          <div class="legend-popover-section">
+            <h4 class="legend-popover-sub">Visual Markers</h4>
+            <div class="legend-popover-item">
+              <div class="popover-marker-wrap">
+                <span class="dot-gold-pulse"></span>
+              </div>
+              <div class="popover-item-info">
+                <span class="popover-label">NEW / Pending Review</span>
+                <p class="popover-desc">Newly onboarded or incomplete profiles. Pinned to top for immediate attention.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="legend-popover-section">
+            <h4 class="legend-popover-sub">Quick Actions</h4>
+            <div class="legend-popover-item">
+              <div class="popover-marker-wrap">
+                <Check :size="14" class="icon-success" />
+              </div>
+              <div class="popover-item-info">
+                <span class="popover-label">Mark Reviewed</span>
+                <p class="popover-desc">Confirms details are verified. Removes the NEW status and pinning.</p>
+              </div>
+            </div>
+            <div class="legend-popover-item">
+              <div class="popover-marker-wrap">
+                <Edit2 :size="14" class="icon-muted" />
+              </div>
+              <div class="popover-item-info">
+                <span class="popover-label">Complete Profile</span>
+                <p class="popover-desc">Update missing contact person, email, or address information.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <div class="main-content">
       <div v-if="loading" class="loading-state">
@@ -388,8 +493,13 @@ onMounted(fetchData)
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="s in paginatedSuppliers" :key="s.id" class="table-row-elite">
-                  <td class="col-name font-bold">{{ s.name }}</td>
+                <tr v-for="s in paginatedSuppliers" :key="s.id" class="table-row-elite" :class="{ 'is-pinned': s.isNew }">
+                  <td class="col-name font-bold">
+                    <div class="name-with-badge">
+                      {{ s.name }}
+                      <span v-if="s.isNew || (!s.contactPerson && !s.phone && !s.email)" class="badge-new">NEW</span>
+                    </div>
+                  </td>
                   <td class="col-contact">{{ s.contactPerson || '—' }}</td>
                   <td class="col-info">
                     <div class="meta-stack">
@@ -411,6 +521,9 @@ onMounted(fetchData)
                   </td>
                   <td class="text-right">
                     <div class="row-actions">
+                      <button v-if="s.isNew" class="icon-btn mark-reviewed" title="Mark Reviewed" @click="markSupplierReviewed(s)">
+                        <Check :size="16" />
+                      </button>
                       <button class="icon-btn edit" title="Edit" @click="openEditSupplier(s)">
                         <Edit2 :size="16" />
                       </button>
@@ -576,7 +689,7 @@ onMounted(fetchData)
 
 .admin-page {
   padding: 1.5rem 2.5rem;
-  height: calc(100vh - 64px);
+  flex: 1; min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -788,6 +901,193 @@ onMounted(fetchData)
 .status-pill.inactive {
   background: #fef2f2;
   color: #ef4444;
+}
+
+.badge-new {
+  font-size: 0.7rem;
+  font-weight: 800;
+  background: #fef9c3;
+  color: #854d0e;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #fde68a;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  animation: pulse-gold 2s infinite;
+  text-transform: uppercase;
+}
+
+@keyframes pulse-gold {
+  0% { box-shadow: 0 0 0 0 rgba(253, 230, 138, 0.7); }
+  70% { box-shadow: 0 0 0 6px rgba(253, 230, 138, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(253, 230, 138, 0); }
+}
+
+.btn-legend-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  padding: 0.625rem 1rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-legend-toggle:hover,
+.btn-legend-toggle.active {
+  background: #f1f5f9;
+  color: #0ea5e9;
+  border-color: #0ea5e9;
+  transform: translateY(-1px);
+}
+
+.registry-legend-popover {
+  position: absolute;
+  top: 90px; /* Elevated slightly */
+  right: 1.5rem;
+  width: 440px;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+  z-index: 150;
+  animation: slideInDown 0.3s ease;
+}
+
+.legend-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+
+.legend-header-main {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.btn-close-legend {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  transition: all 0.2s;
+}
+
+.btn-close-legend:hover {
+  background: #f1f5f9;
+  color: #ef4444;
+}
+
+.legend-popover-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.725rem;
+  font-weight: 900;
+  color: #1e293b;
+  letter-spacing: 0.075em;
+  margin: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pending-popover-badge {
+  background: #fef2f2;
+  color: #ef4444;
+  font-size: 0.625rem;
+  font-weight: 800;
+  padding: 0.2rem 0.625rem;
+  border-radius: 99px;
+  border: 1px solid #fee2e2;
+  text-transform: uppercase;
+  white-space: nowrap;
+  letter-spacing: 0.025em;
+}
+
+.legend-popover-section {
+  margin-bottom: 1.25rem;
+}
+
+.legend-popover-sub {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  margin: 0 0 0.75rem 0;
+}
+
+.legend-popover-item {
+  display: flex;
+  gap: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.popover-marker-wrap {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.popover-item-info .popover-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.15rem;
+}
+
+.popover-item-info .popover-desc {
+  margin: 0;
+  font-size: 0.7rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+/* Animations */
+.legend-fade-enter-active,
+.legend-fade-leave-active {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.legend-fade-enter-from,
+.legend-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.name-with-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.table-row-elite.is-pinned {
+  background: #fffcf0;
+}
+
+.table-row-elite.is-pinned:hover {
+  background: #fef9c3;
+}
+
+.icon-btn.mark-reviewed {
+  color: #10b981;
+}
+.icon-btn.mark-reviewed:hover {
+  background: #ecfdf5;
 }
 
 .card-actions {

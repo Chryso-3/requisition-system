@@ -11,7 +11,11 @@ service cloud.firestore {
 
     function getUserRole() {
       let path = /databases/$(database)/documents/users/$(request.auth.uid);
-      return exists(path) ? get(path).data.role : 'requester';
+      let role = exists(path) ? get(path).data.role : 'requester';
+      // Normalize labels to keys for rule consistency
+      return role == 'BAC Secretary' ? 'bac_secretary' :
+             role == 'Super Administrator' ? 'super_admin' :
+             role == 'Purchaser' ? 'purchaser' : role;
     }
 
     function hasRole(role) {
@@ -29,7 +33,7 @@ service cloud.firestore {
 
     function isApprover() {
       let role = getUserRole();
-      return role in ['section_head', 'warehouse_head', 'budget_officer', 'internal_auditor', 'general_manager'] || role == 'super_admin';
+      return role in ['section_head', 'division_head', 'department_head', 'warehouse_head', 'budget_officer', 'internal_auditor', 'general_manager'] || role == 'super_admin';
     }
 
     function isProcurement() {
@@ -53,7 +57,7 @@ service cloud.firestore {
         (getUserRole() == 'requester' && isOwner(resource.data) && resource.data.status == 'draft') ||
         
         // Approvers can update if they are the current step in the workflow
-        (hasRole('section_head') && resource.data.status == 'pending_recommendation') ||
+        (getUserRole() in ['section_head', 'division_head', 'department_head'] && resource.data.status == 'pending_recommendation') ||
         (hasRole('warehouse_head') && resource.data.status == 'pending_inventory') ||
         (hasRole('budget_officer') && (resource.data.status == 'pending_budget' || resource.data.poStatus == 'pending_budget')) ||
         (hasRole('internal_auditor') && (resource.data.status == 'pending_audit' || resource.data.poStatus == 'pending_audit')) ||
@@ -86,6 +90,13 @@ service cloud.firestore {
     match /requisition_signatures/{sigId} {
       allow read: if isSignedIn();
       // Allow creation if the user has an approver/requester/procurement role
+      allow create, update: if isSignedIn();
+      allow delete: if isSuperAdmin() || hasRole('internal_auditor') || hasRole('general_manager');
+    }
+
+    match /requisition_quotes/{quoteId} {
+      allow read: if isSignedIn();
+      // Allow creation/update (Base64 quotes) for authenticated users (purchaser handles logic)
       allow create, update: if isSignedIn();
       allow delete: if isSuperAdmin() || hasRole('internal_auditor') || hasRole('general_manager');
     }

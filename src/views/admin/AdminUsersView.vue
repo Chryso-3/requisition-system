@@ -261,6 +261,12 @@ onMounted(fetchUsers)
   padding: 0.5rem 2rem 2rem; /* Balanced horizontal padding */
   max-width: 1700px; /* Optimized breadth for symmetry */
   margin: 0 auto;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .page-header {
@@ -344,13 +350,17 @@ onMounted(fetchUsers)
     0 8px 32px rgba(0, 0, 0, 0.04),
     inset 0 0 0 1px rgba(255, 255, 255, 0.2);
   overflow: hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .table-wrapper {
   width: 100%;
-  max-height: 72vh;
+  flex: 1;
   overflow: auto;
-  min-height: 400px;
+  min-height: 0;
   position: relative;
 }
 

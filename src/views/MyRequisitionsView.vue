@@ -629,7 +629,7 @@ onUnmounted(() => {
   width: 100%;
   padding: 0.75rem 1.5rem 1.25rem; /* Added slight top padding for breathing room */
   background: #f8fafc;
-  height: calc(100vh - 64px);
+  flex: 1; min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

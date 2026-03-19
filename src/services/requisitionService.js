@@ -187,13 +187,12 @@ export async function getEmailsByRoles(roles) {
  */
 export async function getEmailsByRole(role) {
   try {
-    const q = query(
-      collection(db, COLLECTIONS.USERS),
-      where('role', '==', role),
-      where('isActive', '==', true),
-    )
+    const q = query(collection(db, COLLECTIONS.USERS), where('role', '==', role))
     const snap = await getDocs(q)
-    return snap.docs.map((d) => d.data().email).filter(Boolean)
+    return snap.docs
+      .map((d) => d.data())
+      .filter((u) => u.isActive !== false && u.email)
+      .map((u) => u.email)
   } catch (error) {
     console.error('[requisitionService] Error fetching emails by role:', error)
     return []
@@ -634,6 +633,65 @@ export async function upsertRequisitionSignature(requisitionId, roleKey, data) {
   return sigId
 }
 
+/**
+ * Save a single quote document (Base64) to Firestore.
+ */
+export async function upsertRequisitionQuote(requisitionId, name, base64) {
+  if (!requisitionId || !base64) return
+  const quoteId = `${requisitionId}_${name}`
+  const ref = doc(db, COLLECTIONS.REQUISITION_QUOTES, quoteId)
+  await setDoc(
+    ref,
+    {
+      requisitionId,
+      name,
+      base64,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  )
+}
+
+/** Fetch all quotes for a requisition. */
+export async function getRequisitionQuotes(requisitionId) {
+  if (!requisitionId) return []
+  const q = query(
+    collection(db, COLLECTIONS.REQUISITION_QUOTES),
+    where('requisitionId', '==', requisitionId),
+  )
+  const snap = await getDocs(q)
+  const results = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  // Sort client-side to avoid mandatory composite index
+  return results.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+}
+
+/** Subscribe to quote docs for a requisition. */
+export function subscribeRequisitionQuotes(requisitionId, onData, onError) {
+  if (!requisitionId) return () => {}
+  const q = query(
+    collection(db, COLLECTIONS.REQUISITION_QUOTES),
+    where('requisitionId', '==', requisitionId),
+  )
+  return subscribeWithFallback(
+    q,
+    true,
+    (snapshot) => {
+      const results = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+      // Robustness: Filter by unique name to avoid orphaned duplicates
+      const uniqueMap = {}
+      for (const item of results) {
+        if (!uniqueMap[item.name]) {
+          uniqueMap[item.name] = item
+        }
+      }
+      const finalResults = Object.values(uniqueMap)
+      // Sort client-side
+      onData(finalResults.sort((a, b) => (a.name || '').localeCompare(b.name || '')))
+    },
+    onError,
+  )
+}
+
 /** Load all signature docs for a requisition. Returns map by roleKey. */
 export async function getRequisitionSignatures(requisitionId) {
   if (!requisitionId) return {}
@@ -696,6 +754,7 @@ export const createRequisition = (data = {}) => ({
   department: data.department ?? '',
   purpose: data.purpose ?? '',
   status: data.status ?? REQUISITION_STATUS.DRAFT,
+  pbacFormNo: data.pbacFormNo ?? '',
 
   // Requested items (array of items)
   items: (data.items ?? []).map(createRequisitionItem),
@@ -762,6 +821,24 @@ export async function generateCanvassNo() {
     const nextNo = lastNo + 1
     await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
     return `CO-${year}-${String(nextNo).padStart(6, '0')}`
+  })
+}
+
+/**
+ * Generate PBAC Form 01 Serial Number (e.g., PBAC-01-2024-0001) via atomic counter.
+ * Format: PBAC-01-[YEAR]-[NUMBER]
+ */
+export async function generatePbacFormNo() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const counterRef = doc(db, 'counters', `pbacFormNo_${year}`)
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(counterRef)
+    const lastNo = snap.exists() ? snap.data().lastNo || 0 : 0
+    const nextNo = lastNo + 1
+    await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
+    return `PBAC-${month}-${year}-${String(nextNo).padStart(4, '0')}`
   })
 }
 
@@ -1264,7 +1341,7 @@ export async function rejectPO(requisitionId, user, { remarks, step }) {
  */
 export async function markRequisitionCanvassed(
   requisitionId,
-  { canvassNumber, canvassDate, canvassBy, supplier, items, signatureData },
+  { canvassNumber, canvassDate, canvassBy, supplier, items, signatureData, hasQuotes },
 ) {
   const current = await getRequisition(requisitionId)
   if (!current || current.status !== REQUISITION_STATUS.APPROVED) {
@@ -1283,6 +1360,7 @@ export async function markRequisitionCanvassed(
     canvassNumber: canvassNumber ?? '',
     submittedToBACAt: at,
     submittedToBACBy: canvassBy ?? null,
+    hasQuotes: true,
   }
 
   if (supplier) updates.supplier = supplier
@@ -1329,8 +1407,12 @@ export async function markRequisitionCanvassed(
   try {
     const reqWithEmail = await ensureRequestorEmail(current)
     const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
+    console.log('[markRequisitionCanvassed] Found BAC emails:', bacEmails)
     if (bacEmails.length > 0) {
+      console.log('[markRequisitionCanvassed] Notifying BAC...')
       await notificationService.notifyBACNewCanvass(reqWithEmail, bacEmails)
+    } else {
+      console.warn('[markRequisitionCanvassed] SKIPPING BAC NOTIFICATION: No active BAC_SECRETARY found.')
     }
     // Tell the requestor that their requisition is now in the canvassing/BAC phase
     await notificationService.notifyRequestorUpdate(
@@ -2368,13 +2450,13 @@ export const APPROVAL_WORKFLOW = {
     canApproveStatus: REQUISITION_STATUS.PENDING_RECOMMENDATION,
     nextStatus: REQUISITION_STATUS.PENDING_INVENTORY,
     field: 'recommendingApproval',
-    title: 'Division Head',
+    title: 'Manager',
   },
   department_head: {
     canApproveStatus: REQUISITION_STATUS.PENDING_RECOMMENDATION,
     nextStatus: REQUISITION_STATUS.PENDING_INVENTORY,
     field: 'recommendingApproval',
-    title: 'Department Head',
+    title: 'Supervisor',
   },
   warehouse_head: {
     canApproveStatus: REQUISITION_STATUS.PENDING_INVENTORY,

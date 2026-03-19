@@ -1228,7 +1228,7 @@ watch(
   flex: 1;
   min-height: 0;
   padding: 1rem 0;
-  overflow: hidden;
+  overflow-y: auto; /* Allow scrolling here */
   display: flex;
   flex-direction: column;
 }
@@ -1236,7 +1236,7 @@ watch(
 .main-page {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto; /* Ensure individual pages can scroll if needed */
   display: flex;
   flex-direction: column;
 }

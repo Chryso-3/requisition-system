@@ -11,6 +11,8 @@ import {
 import { getDeptAbbreviation } from '@/utils/deptUtils'
 import { REQUISITION_STATUS, USER_ROLES, CANVASS_STATUS, PO_STATUS } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
+import { addSupplier } from '@/services/adminService'
+import { useReferenceStore } from '@/stores/reference'
 import PaginationComponent from '@/components/PaginationComponent.vue'
 
 const router = useRouter()
@@ -33,6 +35,31 @@ let unsubscribe = null
 
 const isBACSecretary = computed(() => authStore?.role === USER_ROLES.BAC_SECRETARY)
 const hasSignature = computed(() => !!authStore?.userProfile?.signatureData)
+
+const referenceStore = useReferenceStore()
+const allSuppliers = computed(() => referenceStore.suppliers)
+const saveToRegistry = ref(false)
+const showSupplierSuggestions = ref(false)
+
+const supplierSuggestions = computed(() => {
+  if (!supplier.value.trim()) return []
+  const k = supplier.value.toLowerCase()
+  return allSuppliers.value
+    .filter((s) => s.isActive && s.name.toLowerCase().includes(k))
+    .map((s) => s.name)
+})
+
+const isNewSupplier = computed(() => {
+  const name = supplier.value.trim().toLowerCase()
+  if (!name) return false
+  return !allSuppliers.value.some((s) => s.name.toLowerCase() === name)
+})
+
+function handleSupplierBlur() {
+  setTimeout(() => {
+    showSupplierSuggestions.value = false
+  }, 200)
+}
 
 const submittedRequisitions = computed(() => [...requisitions.value, ...moreRequisitions.value])
 
@@ -99,9 +126,13 @@ async function openIssuePO(r) {
     }
   }
   supplier.value = r.supplier || ''
+  saveToRegistry.value = false
   poItems.value = (r.items || []).map((item) => ({ ...item }))
   orderedAt.value = new Date().toISOString().slice(0, 10)
   actionError.value = ''
+
+  // Fetch suppliers if not already loaded
+  referenceStore.fetchSuppliers()
 }
 function closePOModal() {
   modalPO.value = null
@@ -114,6 +145,11 @@ async function saveIssuePO() {
     actionError.value = 'Missing digital signature. Please set it up in your Profile.'
     return
   }
+  if (!supplier.value.trim()) {
+    actionError.value = 'Please enter a Supplier / Company Name.'
+    return
+  }
+
   if (!poNumber.value.trim()) {
     actionError.value = 'Please enter a Purchase Order number.'
     return
@@ -122,9 +158,21 @@ async function saveIssuePO() {
   actionError.value = ''
   try {
     const user = authStore?.user
+    const supplierName = supplier.value.trim()
+
+    // Handle saving new supplier to registry if requested
+    if (saveToRegistry.value && isNewSupplier.value && supplierName) {
+      try {
+        await addSupplier({ name: supplierName })
+        await referenceStore.fetchSuppliers(true)
+      } catch (err) {
+        console.error('Failed to auto-register supplier:', err)
+      }
+    }
+
     await markRequisitionOrdered(modalPO.value.id, {
       poNumber: poNumber.value.trim(),
-      supplier: supplier.value.trim(),
+      supplier: supplierName,
       items: poItems.value,
       orderedAt: orderedAt.value ? new Date(orderedAt.value + 'T12:00:00') : new Date(),
       orderedBy: user
@@ -367,14 +415,41 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="po-field">
-              <label class="po-label">Supplier / Company Name</label>
-              <input
-                :value="supplier"
-                type="text"
-                class="po-input po-input-readonly"
-                readonly
-              />
+            <div class="po-field supplier-select-field">
+              <label class="po-label">Supplier / Company Name <span class="po-required">*</span></label>
+              <div class="autocomplete-wrap">
+                <input
+                  v-model="supplier"
+                  type="text"
+                  class="po-input"
+                  placeholder="Search or type new supplier..."
+                  @focus="showSupplierSuggestions = true"
+                  @blur="handleSupplierBlur"
+                />
+                <div v-if="showSupplierSuggestions && supplierSuggestions.length > 0" class="suggestions-list">
+                  <div
+                    v-for="sname in supplierSuggestions"
+                    :key="sname"
+                    class="suggestion-item"
+                    @mousedown="supplier = sname; showSupplierSuggestions = false"
+                  >
+                    {{ sname }}
+                  </div>
+                </div>
+              </div>
+              <div v-if="isNewSupplier && supplier.trim()" class="new-supplier-notice">
+                <span class="smart-tag">NEW SUPPLIER</span>
+                <label 
+                  class="premium-checkbox-card" 
+                  :class="{ 'is-checked': saveToRegistry }"
+                  @click.stop="saveToRegistry = !saveToRegistry"
+                >
+                  <div class="checkbox-visual">
+                    <span v-if="saveToRegistry" class="check-mark">✓</span>
+                  </div>
+                  <span class="checkbox-text">Save to Registry?</span>
+                </label>
+              </div>
             </div>
 
             <div class="po-divider"></div>
@@ -596,6 +671,11 @@ onUnmounted(() => {
   letter-spacing: 0.04em;
 }
 
+.po-required {
+  color: #ef4444;
+  margin-left: 2px;
+}
+
 .po-input {
   padding: 0.625rem 0.875rem;
   border: 1.5px solid #e2e8f0;
@@ -769,6 +849,114 @@ onUnmounted(() => {
   cursor: not-allowed;
   transform: none;
 }
+
+/* Supplier Autocomplete Styles */
+.supplier-select-field {
+  position: relative;
+}
+
+.autocomplete-wrap {
+  position: relative;
+}
+
+.suggestions-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  z-index: 50;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.suggestion-item {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  border-bottom: 1px solid #f8fafc;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-item:hover {
+  background: #f1f5f9;
+  color: #2563eb;
+}
+
+.new-supplier-notice {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.25rem;
+}
+
+.smart-tag {
+  font-size: 0.65rem;
+  font-weight: 800;
+  color: #0369a1;
+  letter-spacing: 0.05em;
+  background: #e0f2fe;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.premium-checkbox-card {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 0.625rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.checkbox-visual {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #cbd5e1;
+  border-radius: 5px;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.2s;
+  background: white;
+  flex-shrink: 0;
+}
+
+.is-checked .checkbox-visual {
+  border-color: #3b82f6;
+  background: #3b82f6;
+}
+
+.check-mark {
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.checkbox-text {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1;
+}
+
+.is-checked .checkbox-text {
+  color: #1e40af;
+  font-weight: 700;
+}
+
 .jinja {
   --jinja-bg: #f1f5f9;
   --jinja-surface: #ffffff;
@@ -781,7 +969,7 @@ onUnmounted(() => {
   width: 100%;
   padding: 0.75rem 2rem 1.75rem;
   background: var(--jinja-bg);
-  height: calc(100vh - 64px);
+  flex: 1; min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;

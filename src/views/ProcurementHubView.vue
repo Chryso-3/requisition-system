@@ -8,10 +8,12 @@ import {
   markRequisitionCanvassed,
   markRequisitionReceived,
   generateCanvassNo,
+  upsertRequisitionQuote,
 } from '@/services/requisitionService'
 import { addSupplier } from '@/services/adminService'
 import { useReferenceStore } from '@/stores/reference'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
+import { compressImageToBase64 } from '@/utils/imageUtils'
 import {
   REQUISITION_STATUS,
   USER_ROLES,
@@ -46,6 +48,11 @@ const canvassNumber = ref('')
 const canvassDate = ref('')
 const supplier = ref('')
 const canvassItems = ref([])
+const selectedQuotes = ref([
+  { file: null, base64: null, name: '' },
+  { file: null, base64: null, name: '' },
+  { file: null, base64: null, name: '' },
+])
 const receivedAt = ref('')
 const referenceStore = useReferenceStore()
 const allSuppliers = computed(() => referenceStore.suppliers)
@@ -126,6 +133,11 @@ async function openMarkCanvassed(r) {
 function closeCanvassModal() {
   modalCanvass.value = null
   actionError.value = null
+  selectedQuotes.value = [
+    { file: null, base64: null, name: '' },
+    { file: null, base64: null, name: '' },
+    { file: null, base64: null, name: '' },
+  ]
 }
 
 function handleSupplierBlur() {
@@ -140,46 +152,90 @@ async function saveMarkCanvassed() {
     actionError.value = 'Missing digital signature. Please set it up in your Profile.'
     return
   }
-  if (!supplier.value.trim()) {
-    actionError.value = 'Please enter the winning supplier.'
+
+  // Validate 3 quotes
+  const quotesCount = selectedQuotes.value.filter((q) => q.file || q.base64).length
+  if (quotesCount < 3) {
+    actionError.value = 'Please upload all 3 supplier quotes/images before submitting.'
     return
   }
+
   actionLoading.value = true
   actionError.value = ''
   try {
     const user = authStore.user
     const supplierName = supplier.value.trim()
+    const requisitionId = modalCanvass.value.id
 
-    // Handle saving new supplier to registry if requested
-    if (saveToRegistry.value && isNewSupplier.value) {
+    // 1. Save compressed quotes first
+    for (let i = 0; i < selectedQuotes.value.length; i++) {
+      const q = selectedQuotes.value[i]
+      await upsertRequisitionQuote(
+        requisitionId,
+        `quote_${i + 1}`, // Unique ID part for this quote
+        q.base64
+      )
+    }
+
+    // 2. Handle saving new supplier to registry if requested
+    if (saveToRegistry.value && isNewSupplier.value && supplierName) {
       try {
         await addSupplier({ name: supplierName })
-        // Refresh reference store for all components
         await referenceStore.fetchSuppliers(true)
       } catch (err) {
         console.error('Failed to auto-register supplier:', err)
-        // Benefit of doubt: proceed with canvass even if registry save fails
       }
     }
 
-    await markRequisitionCanvassed(modalCanvass.value.id, {
+    // 3. Mark canvassed
+    await markRequisitionCanvassed(requisitionId, {
       canvassNumber: canvassNumber.value.trim() || undefined,
       canvassDate: new Date(canvassDate.value + 'T12:00:00'),
       canvassBy: user ? { userId: user.uid, name: authStore.displayName, email: user.email } : null,
-      supplier: supplierName,
+      supplier: supplierName || undefined, // Make optional
       items: canvassItems.value,
       signatureData: authStore.userProfile?.signatureData,
+      hasQuotes: true,
     })
     
     // OPTIMISTIC: remove from local list immediately
-    canvassingList.value = canvassingList.value.filter(item => item.id !== modalCanvass.value.id)
+    canvassingList.value = canvassingList.value.filter(item => item.id !== requisitionId)
     
     closeCanvassModal()
   } catch (e) {
+    console.error('Save canvass error:', e)
     actionError.value = e?.message || 'Failed to submit canvass.'
   } finally {
     actionLoading.value = false
   }
+}
+
+async function handleQuoteFile(e, index) {
+  const file = e.target.files[0]
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    actionError.value = 'Please upload image files only (JPG, PNG).'
+    return
+  }
+
+  actionLoading.value = true
+  try {
+    // Compress immediately to ensure we stay under Firestore limits and save memory
+    const compressedBase64 = await compressImageToBase64(file, 1024, 0.6)
+    selectedQuotes.value[index].file = file
+    selectedQuotes.value[index].base64 = compressedBase64
+    selectedQuotes.value[index].name = file.name
+  } catch (err) {
+    console.error('Image compression error:', err)
+    actionError.value = 'Failed to process image.'
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+function clearQuote(index) {
+  selectedQuotes.value[index] = { file: null, base64: null, name: '' }
 }
 
 // Modal Handlers (Receive)
@@ -529,7 +585,7 @@ const getPoStatusLabel = (poStatus) => {
             <div v-if="actionError" class="hub-alert-error">{{ actionError }}</div>
             <div class="form-grid">
               <div class="form-field full supplier-select-field">
-                <label>Winning Supplier Name</label>
+                <label>Winning Supplier Name (Optional)</label>
                 <div class="autocomplete-wrap">
                   <input
                     v-model="supplier"
@@ -571,6 +627,34 @@ const getPoStatusLabel = (poStatus) => {
                 <input v-model="canvassDate" type="date" />
               </div>
             </div>
+
+            <!-- Quote Uploads -->
+            <div class="modal-divider">Supplier Quotes (Required 3)</div>
+            <div class="hub-quote-grid">
+              <div v-for="(q, idx) in selectedQuotes" :key="idx" class="hub-quote-slot">
+                <input
+                  :id="'hub-quote-file-' + idx"
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  @change="handleQuoteFile($event, idx)"
+                />
+                <template v-if="!q.base64">
+                  <label :for="'hub-quote-file-' + idx" class="hub-quote-placeholder">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <span>Quote {{ idx + 1 }}</span>
+                  </label>
+                </template>
+                <template v-else>
+                  <div class="hub-quote-preview-wrap">
+                    <img :src="q.base64" alt="Preview" class="hub-quote-preview" />
+                    <button class="hub-quote-remove" @click="clearQuote(idx)">&times;</button>
+                    <div class="hub-quote-name">{{ q.name }}</div>
+                  </div>
+                </template>
+              </div>
+            </div>
+
             <div class="modal-divider">Item Results (Unit Prices)</div>
             <div class="modal-table-wrap">
               <table class="modal-table">
@@ -696,7 +780,7 @@ const getPoStatusLabel = (poStatus) => {
 .procurement-hub {
   padding: 1rem 2rem 2rem;
   background: #f1f5f9;
-  height: calc(100vh - 64px);
+  flex: 1; min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1272,5 +1356,89 @@ const getPoStatusLabel = (poStatus) => {
   background: #fff7ed;
   color: #ea580c;
   border: 1px solid #f9731633;
+}
+
+/* Quote Grid */
+.hub-quote-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.hub-quote-slot {
+  aspect-ratio: 4 / 3;
+  border: 2px dashed #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  background: #f8fafc;
+  transition: all 0.2s;
+}
+.hub-quote-slot:hover {
+  border-color: #2563eb;
+  background: #f1f5f9;
+}
+
+.hub-quote-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.hub-quote-placeholder svg {
+  opacity: 0.5;
+}
+
+.hub-quote-preview-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+.hub-quote-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.hub-quote-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6);
+  color: #fff;
+  border: none;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.hub-quote-remove:hover {
+  background: #ef4444;
+}
+.hub-quote-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 0.65rem;
+  padding: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
 }
 </style>

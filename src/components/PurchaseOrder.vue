@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import isoCert from '@/assets/iso_certification.png'
 
 const props = defineProps({
   requisition: {
@@ -53,9 +54,7 @@ function formatCurrency(val) {
 }
 
 const isoCertSrc = computed(() => {
-  // Use a string that Vite won't statically analyze as an import
-  // If the file exists, the browser will find it; if not, it will trigger @error
-  return '/src/assets/iso_certification.png'
+  return isoCert
 })
 </script>
 
@@ -67,7 +66,7 @@ const isoCertSrc = computed(() => {
     </div>
 
     <!-- Header Section -->
-    <div class="header">
+    <div class="form-header">
       <div class="logo-left">
         <img src="@/assets/logos.png" alt="LEYECO III" class="main-logo" />
         <div class="company-info">
@@ -384,7 +383,7 @@ const isoCertSrc = computed(() => {
   line-height: 1.3;
 }
 
-.header {
+.form-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;

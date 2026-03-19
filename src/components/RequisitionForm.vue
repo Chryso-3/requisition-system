@@ -189,7 +189,7 @@ async function onSubmit() {
         department: form.department,
         assignedApproverId: form.assignedApproverId,
         assignedApproverName: approverName,
-        assignedApproverRole: assignedManager?.role || 'Section/Division Head',
+        assignedApproverRole: assignedManager?.role || 'section_head',
         purpose: form.purpose,
         date: form.date
           ? new Date(form.date + 'T12:00:00').toISOString()
@@ -203,7 +203,7 @@ async function onSubmit() {
         department: form.department,
         assignedApproverId: form.assignedApproverId,
         assignedApproverName: approverName,
-        assignedApproverRole: assignedManager?.role || 'Section/Division Head',
+        assignedApproverRole: assignedManager?.role || 'section_head',
         purpose: form.purpose,
         date: form.date
           ? new Date(form.date + 'T12:00:00').toISOString()
@@ -260,7 +260,7 @@ async function onSubmit() {
 
       <!-- Direct Approver Assignment -->
       <div class="field" :class="{ 'field-disabled': !form.department || fetchingManagers }">
-        <label>Confirm Name of Approver (Section / Div. Head)</label>
+        <label>Confirm Name of Approver (Section Head / Manager / Supervisor)</label>
         <div v-if="fetchingManagers" class="fetching-indicator">
           <span class="spinner-tiny"></span> Loading authorized personnel...
         </div>

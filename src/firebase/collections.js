@@ -12,6 +12,8 @@ export const COLLECTIONS = {
   SUPPLIERS: 'suppliers',
   /** One doc per requisition signature step (prevents 1MB requisition doc issues). */
   REQUISITION_SIGNATURES: 'requisition_signatures',
+  /** One doc per requisition quote (prevents 1MB requisition doc issues). */
+  REQUISITION_QUOTES: 'requisition_quotes',
   /** Pre-computed analytics summary document (analytics/summary). */
   ANALYTICS: 'analytics',
   /** System settings like registration toggle, banners, etc. */
@@ -66,9 +68,9 @@ export const PO_STATUS = {
  */
 export const USER_ROLES = {
   REQUESTER: 'requester',
-  SECTION_HEAD: 'section_head', // Level 1 Manager
-  DIVISION_HEAD: 'division_head', // Level 2 Manager
-  DEPARTMENT_HEAD: 'department_head', // Level 3 Manager
+  SECTION_HEAD: 'section_head', // Section Head
+  DIVISION_HEAD: 'division_head', // Manager
+  DEPARTMENT_HEAD: 'department_head', // Supervisor
   WAREHOUSE_HEAD: 'warehouse_head', // Inventory Checked
   BUDGET_OFFICER: 'budget_officer', // Budget Approved
   INTERNAL_AUDITOR: 'internal_auditor', // Checked by
@@ -84,8 +86,8 @@ export const USER_ROLES = {
 export const USER_ROLE_LABELS = {
   [USER_ROLES.REQUESTER]: 'Requestor',
   [USER_ROLES.SECTION_HEAD]: 'Section Head',
-  [USER_ROLES.DIVISION_HEAD]: 'Division Head',
-  [USER_ROLES.DEPARTMENT_HEAD]: 'Department Head',
+  [USER_ROLES.DIVISION_HEAD]: 'Manager',
+  [USER_ROLES.DEPARTMENT_HEAD]: 'Supervisor',
   [USER_ROLES.WAREHOUSE_HEAD]: 'Warehouse Section Head',
   [USER_ROLES.BUDGET_OFFICER]: 'Acctg. Div. Supervisor / Budget Officer',
   [USER_ROLES.INTERNAL_AUDITOR]: 'Internal Auditor',

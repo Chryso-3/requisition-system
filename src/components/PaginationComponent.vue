@@ -127,7 +127,7 @@ function changePage(p) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.5rem;
+  padding: 0.5rem 1rem;
   background: white;
   border-top: 1px solid #f1f5f9;
   border-bottom-left-radius: 12px;
@@ -135,7 +135,7 @@ function changePage(p) {
 }
 
 .pagination-info {
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   color: #64748b;
   font-weight: 500;
 }
@@ -148,7 +148,7 @@ function changePage(p) {
 
 .pagination-controls {
   display: flex;
-  gap: 0.35rem;
+  gap: 0.25rem;
   align-items: center;
 }
 
@@ -156,15 +156,15 @@ function changePage(p) {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  height: 32px;
-  padding: 0 0.5rem;
-  font-size: 0.8125rem;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
   font-weight: 700;
   color: #64748b;
   background: white;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
@@ -202,8 +202,8 @@ function changePage(p) {
 @media (max-width: 640px) {
   .pagination-container {
     flex-direction: column;
-    gap: 1rem;
-    padding: 1.5rem;
+    gap: 0.75rem;
+    padding: 1rem;
     text-align: center;
   }
 }

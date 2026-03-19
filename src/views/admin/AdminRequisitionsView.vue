@@ -567,7 +567,9 @@ function formatDate(date) {
   padding: 0.5rem 2rem 1rem;
   max-width: 1700px;
   margin: 0 auto;
-  height: calc(100vh - 64px);
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
 }

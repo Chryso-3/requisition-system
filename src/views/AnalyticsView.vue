@@ -216,14 +216,14 @@ function updateData() {
     pct: poTotal > 0 ? Math.round(((poByStatusSrc[status] || 0) / poTotal) * 100) : 0,
   }))
 
-  // Trend chart: ALWAYS show rolling 12 months for "Strategic" context, regardless of preset
-  const rolling12Months = []
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    rolling12Months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+  // Trend chart: ALWAYS show Jan-Dec of the current year for "Strategic" context
+  const trendMonths = []
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), i, 1)
+    trendMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
   }
 
-  const monthlyTrend = rolling12Months.map((key) => {
+  const monthlyTrend = trendMonths.map((key) => {
     const [y, m] = key.split('-')
     const d = new Date(parseInt(y), parseInt(m) - 1, 1)
     const b = s.byMonth?.[key] || {}

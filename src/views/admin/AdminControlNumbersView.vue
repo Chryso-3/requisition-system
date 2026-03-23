@@ -1,7 +1,16 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { getCounters, setCounter } from '@/services/adminService'
-import { Hash, RotateCcw, AlertTriangle, Info, CheckCircle2, Calendar, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import {
+  Hash,
+  RotateCcw,
+  AlertTriangle,
+  Info,
+  CheckCircle2,
+  Calendar,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-vue-next'
 
 const counters = ref({
   rf: 0,
@@ -122,13 +131,13 @@ onUnmounted(() => {
           <button @click="adjustYear(1)" class="year-nav-btn" title="Next Year">
             <ChevronRight :size="16" />
           </button>
-          
+
           <transition name="fade-in-up">
             <div v-if="showYearPicker" class="year-dropdown-elite glass-card">
               <div class="year-grid">
-                <button 
-                  v-for="y in yearOptions" 
-                   :key="y" 
+                <button
+                  v-for="y in yearOptions"
+                  :key="y"
                   @click="selectYear(y)"
                   class="year-option"
                   :class="{ active: y === selectedYear }"
@@ -213,9 +222,7 @@ onUnmounted(() => {
         </div>
         <div class="elite-next-preview">
           Next expected:
-          <strong
-            >CO-{{ selectedYear }}-{{ String(counters.canvass + 1).padStart(3, '0') }}</strong
-          >
+          <strong>CO-{{ selectedYear }}-{{ String(counters.canvass + 1).padStart(3, '0') }}</strong>
         </div>
         <div class="card-footer-elite">
           <div class="elite-input-group">
@@ -306,8 +313,6 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
-
-    
   </div>
 </template>
 
@@ -354,7 +359,7 @@ onUnmounted(() => {
   color: #475569;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   height: 46px;
 }
 
@@ -376,8 +381,12 @@ onUnmounted(() => {
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .info-banner {
@@ -505,7 +514,7 @@ onUnmounted(() => {
   background: white;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   height: 46px;
   padding: 0 0.25rem;
 }
@@ -601,10 +610,12 @@ onUnmounted(() => {
   border-radius: 10px;
 }
 
-.fade-in-up-enter-active, .fade-in-up-leave-active {
+.fade-in-up-enter-active,
+.fade-in-up-leave-active {
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.fade-in-up-enter-from, .fade-in-up-leave-to {
+.fade-in-up-enter-from,
+.fade-in-up-leave-to {
   opacity: 0;
   transform: translateY(10px);
 }

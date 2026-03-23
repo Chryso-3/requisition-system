@@ -98,7 +98,7 @@ async function onSubmit() {
         </div>
       </div>
       <div class="brand-footer">
-        <p>© 2025 Leyte III Electric Cooperative Inc.</p>
+        <p>&copy; {{ new Date().getFullYear() }} Leyte III Electric Cooperative Inc. | In partnership with Eastern Visayas State University-Tanauan Campus | Designed &amp; Developed by Alberto Tingzon</p>
       </div>
     </div>
 

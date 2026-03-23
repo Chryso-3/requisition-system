@@ -512,7 +512,7 @@ onUnmounted(() => {
 
 .year-selector-elite:focus-within {
   border-color: #0ea5e9;
-  ring: 2px solid rgba(14, 165, 233, 0.1);
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.1);
 }
 
 .year-display-btn {

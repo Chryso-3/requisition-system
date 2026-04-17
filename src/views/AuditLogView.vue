@@ -58,8 +58,7 @@ const canDownloadAndDeleteLog = computed(
     authStore?.role === USER_ROLES.INTERNAL_AUDITOR || authStore?.role === USER_ROLES.SUPER_ADMIN,
 )
 
-// Action filter: show all | approver actions | purchaser actions
-const purchaseFilter = ref('all')
+// Search by RF Control No. (partial, case-insensitive)
 // Search by RF Control No. (partial, case-insensitive)
 const rfSearchQuery = ref('')
 // Date range for log: All time | Today | This month | Custom
@@ -112,7 +111,7 @@ function applyLogCustomRange() {
 }
 
 // Reset to page 1 when filter or search changes
-watch([purchaseFilter, rfSearchQuery, logDatePreset, logStartDate, logEndDate, pageSize], () => {
+watch([rfSearchQuery, logDatePreset, logStartDate, logEndDate, pageSize], () => {
   currentPage.value = 1
 })
 
@@ -126,31 +125,6 @@ function entrySignedAt(entry) {
 
 const filteredLogEntries = computed(() => {
   let list = logEntries.value
-  if (purchaseFilter.value === 'purchaser') {
-    list = list.filter((e) => {
-      const step = (e.step || '').toLowerCase()
-      const action = (e.action || '').toLowerCase()
-      return (
-        e.purchaseStatus ||
-        e.poStatus ||
-        step === 'purchaser' ||
-        step.startsWith('po_') ||
-        action.startsWith('po_')
-      )
-    })
-  } else if (purchaseFilter.value === 'approver') {
-    list = list.filter((e) => {
-      const step = (e.step || '').toLowerCase()
-      const action = (e.action || '').toLowerCase()
-      const isProcurement =
-        e.purchaseStatus ||
-        e.poStatus ||
-        step === 'purchaser' ||
-        step.startsWith('po_') ||
-        action.startsWith('po_')
-      return !isProcurement
-    })
-  }
   const q = (rfSearchQuery.value || '').trim().toLowerCase()
   if (q) {
     list = list.filter((e) => {
@@ -327,17 +301,14 @@ function getJourneyTrail(journey) {
   const reqId = journey.requisitionId
   const rMap = requisitionStatusMap.value[reqId] || {}
   const rMapStatus = (rMap.status || '').toLowerCase()
-  const canvassStatus = (rMap.canvassStatus || '').toLowerCase()
-  const poStatus = (rMap.poStatus || '').toLowerCase()
-  const purchaseStatus = (rMap.purchaseStatus || '').toLowerCase()
 
   const anyApprovedInHistory = journey.entries.some((e) => {
     const a = (e.action || '').toLowerCase()
     const s = (e.statusAfter || '').toLowerCase()
-    return a === 'approved' || s === 'approved' || a === 'po_approved'
+    return a === 'approved' || s === 'approved'
   })
 
-  const approvedStatuses = ['approved', 'canvassed', 'submitted_to_bac', 'order_created', 'po_issued', 'received', 'closed']
+  const approvedStatuses = ['approved']
   const isPostApproved = approvedStatuses.includes(rMapStatus) || anyApprovedInHistory
 
   const requisitionStatus =
@@ -350,9 +321,6 @@ function getJourneyTrail(journey) {
     { label: 'Budget', status: 'pending_budget' },
     { label: 'Audit', status: 'pending_audit' },
     { label: 'GM', status: 'pending_approval' },
-    { label: 'Canvass', id: 'canvass' },
-    { label: 'PO', id: 'po' },
-    { label: 'Done', id: 'done' },
   ]
 
   const requisitionStatusMapIndices = {
@@ -362,8 +330,8 @@ function getJourneyTrail(journey) {
     pending_budget: 2,
     pending_audit: 3,
     pending_approval: 4,
+    approved: 5,
   }
-  approvedStatuses.forEach(s => { requisitionStatusMapIndices[s] = 5 })
 
   const reqIndex = requisitionStatusMapIndices[requisitionStatus] ?? (isPostApproved ? 5 : -1)
 
@@ -371,50 +339,27 @@ function getJourneyTrail(journey) {
     let isDone = false
     let isActive = false
     let isFailed = false
-    let isCanvassedStep = false
-    let isPOStep = false
-    let isReceivedStep = false
 
-    if (idx < 5) {
-      isDone = idx < reqIndex || isPostApproved || requisitionStatus === 'approved'
-      isActive = !isPostApproved && idx === reqIndex
-      
-      if (requisitionStatus === 'rejected') {
-        const rejectedEntry = journey.entries.find((e) => {
-          const act = (e.action || '').toLowerCase()
-          return (act === 'declined' || act === 'rejected') && !act.includes('po_')
-        })
-        const rejectedAt = rejectedEntry?.step || ''
-        const failIdx = steps.slice(0, 5).findIndex(step => 
-          step.status.includes(rejectedAt) || rejectedAt.includes(step.label.toLowerCase())
-        )
-        if (idx === failIdx) isFailed = true
-        if (idx < failIdx) isDone = true
-      }
-    } else if (idx === 5) {
-      const hasCanvassAction = journey.entries.some(e => e.action?.toLowerCase() === 'canvassed')
-      isCanvassedStep = hasCanvassAction || ['canvassed', 'submitted_to_bac', 'order_created'].includes(canvassStatus) || rMapStatus === 'canvassed'
-      isDone = (canvassStatus !== 'pending' && canvassStatus !== '') || isCanvassedStep
-      isActive = isPostApproved && (canvassStatus === 'pending' || !canvassStatus) && purchaseStatus !== 'received'
-    } else if (idx === 6) {
-      const hasPOAction = journey.entries.some(e => ['ordered', 'po_issued'].includes(e.action?.toLowerCase()))
-      isPOStep = hasPOAction || poStatus === 'approved' || purchaseStatus === 'received'
-      isDone = isPOStep
-      isActive = !isDone && (poStatus && poStatus !== 'rejected')
-      if (poStatus === 'rejected') isFailed = true
-    } else if (idx === 7) {
-      isReceivedStep = purchaseStatus === 'received'
-      isDone = isReceivedStep
-      isActive = (poStatus === 'approved' || poStatus === 'po_issued') && !isReceivedStep
+    isDone = idx < reqIndex || isPostApproved || requisitionStatus === 'approved'
+    isActive = !isPostApproved && idx === reqIndex
+    
+    if (requisitionStatus === 'rejected') {
+      const rejectedEntry = journey.entries.find((e) => {
+        const act = (e.action || '').toLowerCase()
+        return (act === 'declined' || act === 'rejected')
+      })
+      const rejectedAt = rejectedEntry?.step || ''
+      const failIdx = steps.findIndex(step => 
+        step.status.includes(rejectedAt) || rejectedAt.includes(step.label.toLowerCase())
+      )
+      if (idx === failIdx) isFailed = true
+      if (idx < failIdx) isDone = true
     }
 
     return {
       ...s,
       active: isActive,
-      done: isDone && !isCanvassedStep && !isPOStep && !isReceivedStep,
-      canvassed: isCanvassedStep,
-      po: isPOStep,
-      received: isReceivedStep,
+      done: isDone,
       failed: isFailed,
     }
   })
@@ -461,9 +406,6 @@ function mapLogEntry(entry, index) {
     name: entry.name ?? '—',
     title: entry.title ?? '',
     email: entry.email ?? '',
-    purchaseStatus: entry.purchaseStatus ?? '',
-    canvassNumber: entry.canvassNumber ?? '',
-    poNumber: entry.poNumber ?? '',
     signedAt: entry.signedAt,
     statusBefore: entry.statusBefore ?? '',
     statusAfter: entry.statusAfter ?? '',
@@ -476,11 +418,6 @@ function mapLogEntry(entry, index) {
 
 const UI_ROLE_LABELS = {
   ...USER_ROLE_LABELS,
-  po_audit: 'Internal Auditor (PO)',
-  po_budget: 'Budget Officer (PO)',
-  po_gm: 'General Manager (PO)',
-  purchase_order: 'Purchaser / BAC',
-  purchaser_canvass: 'Purchaser (Canvass)',
 }
 
 function statusText(code) {
@@ -560,7 +497,6 @@ function buildAndDownloadLogCsv(entries) {
     'What happened',
     'RF Control No.',
     'Purpose',
-    'Purchase',
     'Step',
     'Action',
     'By',
@@ -577,7 +513,6 @@ function buildAndDownloadLogCsv(entries) {
       whatHappened(e),
       e.rfControlNo ?? '—',
       (e.purpose ?? '—').replace(/\s+/g, ' ').trim(),
-      purchase,
       stepLabel(e.step),
       badgeText(e),
       e.name ?? '—',
@@ -723,12 +658,7 @@ async function toggleExpand(segment) {
             { f: 'budgetApproved', s: 'budget_officer', t: 'Budget Officer', a: 'approved' },
             { f: 'checkedBy', s: 'internal_auditor', t: 'Internal Auditor', a: 'approved' },
             { f: 'approvedBy', s: 'general_manager', t: 'General Manager', a: 'approved' },
-            { f: 'canvassBy', s: 'purchaser_canvass', t: 'Purchaser', a: 'canvassed' },
-            { f: 'poBudgetApproved', s: 'po_budget', t: 'Budget Officer (PO)', a: 'po_approved' },
-            { f: 'poAuditApproved', s: 'po_audit', t: 'Internal Auditor (PO)', a: 'po_approved' },
-            { f: 'poGMApproved', s: 'po_gm', t: 'General Manager (PO)', a: 'po_approved' },
             { f: 'rejectedBy', s: 'rejected', t: 'Approver', a: 'declined' },
-            { f: 'poRejectedBy', s: 'po_rejected', t: 'Approver (PO)', a: 'po_rejected' },
             { f: 'voidedBy', s: 'voided_admin', t: 'Super Admin', a: 'voided' },
           ]
 
@@ -806,54 +736,34 @@ async function toggleExpand(segment) {
   }
 }
 
-// Purchase/action badge helpers
+// Status/action badge helpers
 function badgeKey(entry) {
   const action = (entry.action || '').toLowerCase()
   
-  // 1. Explicit history actions take precedence (for expanded rows)
   if (action === 'created' || action === 'submitted') return 'default'
-  if (action === 'approved' || action === 'po_approved') return 'approved'
-  if (action === 'declined' || action === 'rejected' || action === 'po_rejected' || action === 'voided') return 'declined'
-  if (action === 'canvassed') return 'canvassed'
-  if (action === 'ordered' || action === 'po_issued') return 'ordered'
-  if (action === 'received') return 'received'
+  if (action === 'approved') return 'approved'
+  if (action === 'declined' || action === 'rejected' || action === 'voided') return 'declined'
 
-  // 2. Specific status on the entry itself (synthesis fallback)
-  const entryPs = (entry.purchaseStatus || '').toLowerCase()
-  if (entryPs === 'ordered' || entryPs === 'received') return entryPs
-  if (entryPs === 'approved') return 'approved'
-  if (entryPs === 'declined' || entryPs === 'rejected') return 'declined'
-
-  // 3. Fallback to global requisition status (primarily for Journey row summary)
-  const globalPs = (requisitionStatusMap.value[entry.requisitionId]?.purchaseStatus || '').toLowerCase()
-  if (globalPs === 'ordered' || globalPs === 'received') return globalPs
-  if (globalPs === 'approved') return 'approved'
-  if (globalPs === 'declined' || globalPs === 'rejected') return 'declined'
+  const status = (entry.statusAfter || '').toLowerCase()
+  if (status === 'approved') return 'approved'
+  if (status === 'rejected' || status === 'voided') return 'declined'
   
   return 'default'
 }
 
 function badgeText(entry) {
-  // Priority 1: Specific action taken in this log entry
   const action = (entry.action || '').toLowerCase()
   if (action) {
     if (action === 'created') return 'Created'
     if (action === 'submitted') return 'Submitted'
-    if (action === 'po_rejected') return 'PO Rejected'
-    if (action === 'approved' || action === 'po_approved') return 'Approved'
+    if (action === 'approved') return 'Approved'
     if (action === 'declined' || action === 'rejected') return 'Declined'
-    if (action === 'ordered' || action === 'po_issued') return 'Ordered'
-    if (action === 'received') return 'Received'
-    if (action === 'canvassed') return 'Canvassed'
-    if (action === 'submitted_to_bac') return 'To BAC'
     if (action === 'force_advance') return 'Overridden'
     return action.charAt(0).toUpperCase() + action.slice(1)
   }
 
-  // Priority 2: Fallback to global purchaseStatus only if no specific action
-  const ps =
-    entry.purchaseStatus || requisitionStatusMap.value[entry.requisitionId]?.purchaseStatus || ''
-  if (ps) return ps.charAt(0).toUpperCase() + ps.slice(1)
+  const status = (entry.statusAfter || '').toLowerCase()
+  if (status) return status.charAt(0).toUpperCase() + status.slice(1)
 
   return '—'
 }
@@ -873,36 +783,12 @@ function whatHappened(entry) {
     return 'Requisition Created'
   }
 
-  if (step === 'purchaser' || step.includes('purchaser_') || step === 'purchase_order') {
-    if (action === 'ordered' || action === 'po_issued') return 'PO Issued'
-    if (action === 'received') return 'Items Received'
-    if (action === 'declined') return 'Cancelled'
-    return 'Purchaser Process'
-  }
-
-  if (action === 'po_approved') {
-    if (step === 'po_budget' || step === 'budget officer') return 'PO Funds Certified'
-    if (step === 'po_audit' || step === 'internal auditor') return 'PO Pre-Audited'
-    if (step === 'po_gm' || step === 'general manager') return 'PO GM Approved'
-    return 'PO Approved'
-  }
-
-  if (action === 'po_rejected') {
-    if (step === 'po_budget' || step === 'budget officer') return 'PO Rejected — Budget Step'
-    if (step === 'po_audit' || step === 'internal auditor') return 'PO Rejected — Audit Step'
-    if (step === 'po_gm' || step === 'general manager') return 'PO Rejected — GM Final Review'
-    return 'Purchase Order Rejected'
-  }
-
   if (action === 'approved') {
     if (statusTo === REQUISITION_STATUS.APPROVED.toLowerCase()) return 'Requisition Fully Approved'
     return 'Phase Approval Granted'
   }
 
   if (action === 'declined') return 'Requisition Declined'
-
-  if (action === 'ordered') return 'Purchase Order Issued'
-  if (action === 'received') return 'Items Received & Logged'
 
   if (action === 'submitted') return 'Requisition Submitted for Approval'
 
@@ -915,16 +801,12 @@ async function updateRequisitionStatusMap() {
   const ids = Array.from(new Set(logEntries.value.map((e) => e.requisitionId).filter(Boolean)))
   const toFetch = ids.filter((id) => !requisitionStatusMap.value[id])
   if (toFetch.length === 0) return
-  // Fetch in parallel for speed (table already visible; this fills Purchase column / details)
+  // Fetch in parallel for speed (table already visible; this fills details)
   const results = await Promise.all(toFetch.map((id) => getRequisition(id).catch(() => null)))
   toFetch.forEach((id, i) => {
     const r = results[i]
     requisitionStatusMap.value[id] = {
       status: r?.status ?? '',
-      purchaseStatus: r?.purchaseStatus ?? '',
-      canvassStatus: r?.canvassStatus ?? '',
-      poStatus: r?.poStatus ?? '',
-      poNumber: r?.poNumber ?? '',
       requestedByName: r?.requestedBy?.name ?? '—',
     }
   })
@@ -981,11 +863,6 @@ onMounted(load)
                 autocomplete="off"
               />
             </div>
-            <select v-model="purchaseFilter" class="premium-select">
-              <option value="all">All Journal Entries</option>
-              <option value="approver">Approval Workflow</option>
-              <option value="purchaser">Procurement & PO Flow</option>
-            </select>
             <select v-model="logDatePreset" class="premium-select">
               <option value="all">All time</option>
               <option value="today">Today</option>
@@ -1025,13 +902,6 @@ onMounted(load)
                 <strong>Action Markers</strong>
                 <div class="legend-row">
                   <span class="status-dot approved"></span> Success / Approval
-                </div>
-                <div class="legend-row">
-                  <span class="status-dot canvassed"></span> Canvassed
-                </div>
-                <div class="legend-row"><span class="status-dot ordered"></span> PO Processing</div>
-                <div class="legend-row">
-                  <span class="status-dot received"></span> Items Received
                 </div>
                 <div class="legend-row"><span class="status-dot declined"></span> Declined</div>
                 <div class="legend-row">
@@ -1117,10 +987,7 @@ onMounted(load)
                               :class="{ 
                                 done: step.done, 
                                 active: step.active, 
-                                failed: step.failed, 
-                                canvassed: step.canvassed,
-                                po: step.po,
-                                received: step.received
+                                failed: step.failed
                               }"
                             :title="step.label"
                           ></div>
@@ -1179,12 +1046,6 @@ onMounted(load)
                                 <span class="badge-pill" :class="badgeKey(entry)">
                                   {{ badgeText(entry) }}
                                 </span>
-                                <div v-if="entry.canvassNumber" class="identifier-subtext">
-                                  {{ entry.canvassNumber }}
-                                </div>
-                                <div v-if="entry.poNumber" class="identifier-subtext">
-                                  {{ entry.poNumber }}
-                                </div>
                               </td>
                               <td class="remarks-text">{{ entry.remarks || '-' }}</td>
                               <td style="width: 140px; text-align: right" class="muted time-ago">
@@ -1672,25 +1533,9 @@ onMounted(load)
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
 }
 
-/* PO phase dots also blue when done */
-.mini-step.po {
-  background: #3b82f6;
-  box-shadow: 0 1px 2px rgba(59, 130, 246, 0.2);
-}
-
 .mini-step.failed {
   background: #ef4444;
   box-shadow: 0 1px 2px rgba(239, 68, 68, 0.2);
-}
-
-.mini-step.canvassed {
-  background: #f59e0b;
-  box-shadow: 0 1px 2px rgba(245, 158, 11, 0.2);
-}
-
-.mini-step.received {
-  background: #8b5cf6;
-  box-shadow: 0 1px 2px rgba(139, 92, 246, 0.2);
 }
 
 .time-cell {
@@ -1734,24 +1579,9 @@ onMounted(load)
   box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
 }
 
-.status-dot.ordered {
-  background: #3b82f6;
-  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
-}
-
-.status-dot.received {
-  background: #8b5cf6;
-  box-shadow: 0 0 6px rgba(139, 92, 246, 0.4);
-}
-
 .status-dot.declined {
   background: #ef4444;
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
-}
-
-.status-dot.canvassed {
-  background: #f59e0b;
-  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
 }
 
 .history-dot {
@@ -1763,10 +1593,7 @@ onMounted(load)
   margin-top: 4px;
 }
 .history-dot.approved { background: #10b981; }
-.history-dot.ordered { background: #3b82f6; }
-.history-dot.received { background: #8b5cf6; }
 .history-dot.declined { background: #ef4444; }
-.history-dot.canvassed { background: #f59e0b; }
 .history-dot.default { background: #cbd5e1; }
 
 /* History Row */
@@ -1830,23 +1657,9 @@ onMounted(load)
   background: #ecfdf5;
   color: #059669;
 }
-.badge-pill.ordered {
-  background: #eff6ff;
-  color: #2563eb;
-}
-.badge-pill.received {
-  background: #ede9fe;
-  color: #6d28d9;
-  border: 1px solid #ddd6fe;
-}
 .badge-pill.declined {
   background: #fef2f2;
   color: #dc2626;
-}
-
-.badge-pill.canvassed {
-  background: #fffbeb;
-  color: #b45309;
 }
 
 .override-entry {

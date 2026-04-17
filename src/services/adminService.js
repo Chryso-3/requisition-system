@@ -1,4 +1,4 @@
-import { db, auth } from '@/firebase'
+import { db } from '@/firebase'
 import {
   collection,
   getDocs,
@@ -113,29 +113,18 @@ export async function updateSystemConfig(updates) {
 }
 
 /**
- * Get current counters for RF, Canvass, PO, and PBAC for a specific year
+ * Get current counters (RF) for a specific year
  */
 export async function getCounters(yearInput) {
   const year = yearInput || new Date().getFullYear()
-  const refs = {
-    rf: doc(db, 'counters', 'requisitionRf'), // Keep as global for now, but referenced with year in UI
-    canvass: doc(db, 'counters', `canvassNo_${year}`),
-    po: doc(db, 'counters', `poNo_${year}`),
-    pbac: doc(db, 'counters', `pbacFormNo_${year}`),
+  const refers = {
+    rf: doc(db, 'counters', 'requisitionRf'),
   }
 
-  const [rfSnap, canvassSnap, poSnap, pbacSnap] = await Promise.all([
-    getDoc(refs.rf),
-    getDoc(refs.canvass),
-    getDoc(refs.po),
-    getDoc(refs.pbac),
-  ])
+  const rfSnap = await getDoc(refers.rf)
 
   return {
     rf: rfSnap.exists() ? rfSnap.data().lastNo || 0 : 0,
-    canvass: canvassSnap.exists() ? canvassSnap.data().lastNo || 0 : 0,
-    po: poSnap.exists() ? poSnap.data().lastNo || 0 : 0,
-    pbac: pbacSnap.exists() ? pbacSnap.data().lastNo || 0 : 0,
     year,
   }
 }
@@ -143,21 +132,11 @@ export async function getCounters(yearInput) {
 /**
  * Manually override a counter value for a specific year
  */
-export async function setCounter(type, value, yearInput) {
-  const year = yearInput || new Date().getFullYear()
-  let ref
-  if (type === 'rf') {
-    ref = doc(db, 'counters', 'requisitionRf')
-  } else if (type === 'canvass') {
-    ref = doc(db, 'counters', `canvassNo_${year}`)
-  } else if (type === 'po') {
-    ref = doc(db, 'counters', `poNo_${year}`)
-  } else if (type === 'pbac') {
-    ref = doc(db, 'counters', `pbacFormNo_${year}`)
-  } else {
+export async function setCounter(type, value) {
+  if (type !== 'rf') {
     throw new Error('Invalid counter type')
   }
-
+  const ref = doc(db, 'counters', 'requisitionRf')
   await setDoc(ref, { lastNo: parseInt(value) }, { merge: true })
 }
 
@@ -188,33 +167,6 @@ export async function updateDepartment(id, updates) {
   })
 }
 
-/**
- * SUPPLIERS MANAGEMENT
- */
-
-export async function getSuppliers() {
-  const q = query(collection(db, COLLECTIONS.SUPPLIERS), orderBy('name', 'asc'))
-  const snap = await getDocs(q)
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-}
-
-export async function addSupplier(data) {
-  const ref = collection(db, COLLECTIONS.SUPPLIERS)
-  await addDoc(ref, {
-    ...data,
-    isActive: true,
-    isNew: true, // Flag as new for admin review
-    createdAt: serverTimestamp(),
-  })
-}
-
-export async function updateSupplier(id, updates) {
-  const ref = doc(db, COLLECTIONS.SUPPLIERS, id)
-  await updateDoc(ref, {
-    ...updates,
-    updatedAt: serverTimestamp(),
-  })
-}
 /**
  * API for Fetching Managers by Department (For Direct Assignment)
  * Fetches all users in the department. OGM (Office of General Manager) users

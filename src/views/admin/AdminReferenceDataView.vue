@@ -1,63 +1,28 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import * as XLSX from 'xlsx'
+import { ref, onMounted, computed, watch } from 'vue'
 import {
   addDepartment,
   updateDepartment,
-  addSupplier,
-  updateSupplier,
 } from '@/services/adminService'
 import { useReferenceStore } from '@/stores/reference'
-import PaginationComponent from '@/components/PaginationComponent.vue'
 import {
   Building2,
-  Truck,
   Plus,
   Search,
   CheckCircle2,
   XCircle,
-  AlertTriangle,
   Loader2,
-  Trash2,
-  Check,
-  Edit2,
-  Upload,
-  Info,
-  X,
 } from 'lucide-vue-next'
 
-const activeTab = ref('departments') // 'departments' or 'suppliers'
-const showSupplierLegend = ref(false)
+const activeTab = ref('departments')
 const referenceStore = useReferenceStore()
 const departments = computed(() => referenceStore.departments)
-const suppliers = computed(() => referenceStore.suppliers)
 const loading = computed(() => referenceStore.loading)
 const searchKey = ref('')
 const isAdding = ref(false)
 const editingId = ref(null)
-const statusFilter = ref('all')
 
-// Pagination
-const currentPage = ref(1)
-const pageSize = ref(10)
-
-// Excel import state
-const fileInputRef = ref(null)
-const importPreview = ref([]) // rows parsed from xlsx
-const showImportModal = ref(false)
-const importLoading = ref(false)
-const importError = ref('')
-
-// Forms
 const deptForm = ref({ name: '' })
-const supplierForm = ref({
-  name: '',
-  contactPerson: '',
-  email: '',
-  phone: '',
-  address1: '',
-  address2: '',
-})
 
 const filteredDepartments = computed(() => {
   if (!searchKey.value) return departments.value
@@ -65,48 +30,8 @@ const filteredDepartments = computed(() => {
   return departments.value.filter((d) => d.name.toLowerCase().includes(k))
 })
 
-const filteredSuppliers = computed(() => {
-  let list = [...suppliers.value]
-  
-  if (statusFilter.value !== 'all') {
-    const isActive = statusFilter.value === 'active'
-    list = list.filter(s => !!s.isActive === isActive)
-  }
-
-  if (searchKey.value) {
-    const k = searchKey.value.toLowerCase()
-    list = list.filter(
-      (s) =>
-        s.name.toLowerCase().includes(k) ||
-        (s.contactPerson || '').toLowerCase().includes(k) ||
-        (s.email || '').toLowerCase().includes(k) ||
-        (s.address1 || '').toLowerCase().includes(k) ||
-        (s.address2 || '').toLowerCase().includes(k),
-    )
-  }
-  
-  // Pinned "New" or "Incomplete" suppliers first, then alphabetical
-  return list.sort((a, b) => {
-    const aNeedsReview = !!a.isNew || (!a.contactPerson && !a.phone && !a.email)
-    const bNeedsReview = !!b.isNew || (!b.contactPerson && !b.phone && !b.email)
-    
-    if (aNeedsReview !== bNeedsReview) return aNeedsReview ? -1 : 1
-    return (a.name || '').localeCompare(b.name || '')
-  })
-})
-
-const newSuppliersCount = computed(() => 
-  suppliers.value.filter((s) => s.isNew || (!s.contactPerson && !s.phone && !s.email)).length
-)
-
-const totalPages = computed(() => Math.ceil(filteredSuppliers.value.length / pageSize.value) || 1)
-const paginatedSuppliers = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredSuppliers.value.slice(start, start + pageSize.value)
-})
-
 async function fetchData() {
-  await referenceStore.ensureAll()
+  await referenceStore.fetchDepartments()
 }
 
 async function handleAddDept() {
@@ -119,7 +44,6 @@ async function handleAddDept() {
   
   try {
     await addDepartment(name)
-    // Silently refresh in background to get real ID and server state
     await referenceStore.fetchDepartments(true)
   } catch (err) {
     referenceStore.rollbackDept(tempId)
@@ -127,155 +51,10 @@ async function handleAddDept() {
   }
 }
 
-async function handleAddSupplier() {
-  const data = { ...supplierForm.value }
-  if (!data.name.trim()) return
-  
-  let tempId = null
-  if (!editingId.value) {
-    tempId = referenceStore.optimisticallyAddSupplier(data)
-  }
-
-  isAdding.value = false
-  const isEdit = !!editingId.value
-  const existingId = editingId.value
-  resetSupplierForm()
-  
-  try {
-    if (isEdit) {
-      // Clear isNew flag when details are updated
-      await updateSupplier(existingId, { ...data, isNew: false })
-    } else {
-      await addSupplier(data)
-    }
-    await referenceStore.fetchSuppliers(true)
-  } catch (err) {
-    if (tempId) referenceStore.rollbackSupplier(tempId)
-    alert('Error saving supplier: ' + err.message)
-  }
-}
-
-async function markSupplierReviewed(s) {
-  try {
-    await updateSupplier(s.id, { isNew: false })
-    await referenceStore.fetchSuppliers(true)
-  } catch (err) {
-    console.error('Failed to mark as reviewed:', err)
-  }
-}
-
-function resetSupplierForm() {
-  editingId.value = null
-  supplierForm.value = {
-    name: '',
-    contactPerson: '',
-    email: '',
-    phone: '',
-    address1: '',
-    address2: '',
-  }
-}
-
 function openAddModal() {
-  resetSupplierForm()
+  editingId.value = null
+  deptForm.value.name = ''
   isAdding.value = true
-}
-
-function openEditSupplier(s) {
-  editingId.value = s.id
-  supplierForm.value = {
-    name: s.name || '',
-    contactPerson: s.contactPerson || '',
-    email: s.email || '',
-    phone: s.phone || '',
-    address1: s.address1 || '',
-    address2: s.address2 || '',
-  }
-  isAdding.value = true
-}
-
-function handlePageChange(p) {
-  currentPage.value = p
-}
-
-function triggerExcelImport() {
-  importError.value = ''
-  fileInputRef.value?.click()
-}
-
-function onFileSelected(event) {
-  const file = event.target.files?.[0]
-  if (!file) return
-
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    try {
-      importError.value = ''
-      const data = new Uint8Array(e.target.result)
-      const workbook = XLSX.read(data, { type: 'array' })
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' })
-
-      // Normalize column names (case & whitespace insensitive)
-      const mappedRows = rows.map((row) => {
-        const lower = Object.fromEntries(
-          Object.entries(row).map(([k, v]) => [(k || '').trim().toLowerCase().replace(/\s+/g, ''), String(v || '').trim()])
-        )
-        // Excel layout from before: 'Nome' = business/company name, 'Supplier name' = contact person
-        // Supported generic fallbacks for other Excel formats
-        return {
-          name: lower['nome'] || lower['businessname'] || lower['company'] || lower['companyname'] || lower['name'] || lower['supplier'] || lower['vendor'] || '',
-          contactPerson: lower['suppliername'] || lower['contactperson'] || lower['contactname'] || lower['contact'] || lower['person'] || lower['representative'] || '',
-          phone: lower['phone'] || lower['phonenumber'] || lower['mobile'] || lower['number'] || lower['contactnumber'] || '',
-          email: lower['email'] || lower['emailaddress'] || '',
-          address1: lower['address1'] || lower['addressline1'] || lower['address'] || lower['street'] || '',
-          address2: lower['address2'] || lower['addressline2'] || lower['city'] || lower['province'] || '',
-        }
-      })
-      
-      // Only keep rows that have at least some data
-      importPreview.value = mappedRows.filter(r => r.name || r.contactPerson || r.email || r.phone || r.address1)
-
-      if (importPreview.value.length === 0) {
-        importError.value = 'No valid data found. Please ensure your Excel file has proper column headers (e.g. "Name", "Company", "Supplier", "Contact", "Phone").'
-      }
-      showImportModal.value = true
-    } catch (err) {
-      importError.value = 'Failed to read file: ' + err.message
-      showImportModal.value = true
-    } finally {
-      // Reset file input so same file can be selected again
-      event.target.value = ''
-    }
-  }
-  reader.readAsArrayBuffer(file)
-}
-
-async function confirmImport() {
-  importLoading.value = true
-  importError.value = ''
-  let successCount = 0
-  let failCount = 0
-  try {
-    for (const row of importPreview.value) {
-      try {
-        await addSupplier({ ...row })
-        successCount++
-      } catch {
-        failCount++
-      }
-    }
-    showImportModal.value = false
-    importPreview.value = []
-    await referenceStore.fetchSuppliers(true)
-    if (failCount > 0) {
-      alert(`Import done: ${successCount} added, ${failCount} failed.`)
-    }
-  } catch (err) {
-    importError.value = 'Import failed: ' + err.message
-  } finally {
-    importLoading.value = false
-  }
 }
 
 async function toggleDeptStatus(dept) {
@@ -287,34 +66,12 @@ async function toggleDeptStatus(dept) {
   }
 }
 
-async function toggleSupplierStatus(supplier) {
-  try {
-    await updateSupplier(supplier.id, { isActive: !supplier.isActive })
-    await referenceStore.fetchSuppliers(true)
-  } catch (err) {
-    alert('Error updating status: ' + err.message)
-  }
-}
-
-watch([searchKey, statusFilter, activeTab], () => {
-  currentPage.value = 1
+watch(searchKey, () => {
+  // Reset pagination or search relevant state if needed
 })
-
-function handleClickOutside(e) {
-  if (showSupplierLegend.value && 
-      !e.target.closest('.registry-legend-popover') && 
-      !e.target.closest('.btn-legend-toggle')) {
-    showSupplierLegend.value = false
-  }
-}
 
 onMounted(() => {
   fetchData()
-  window.addEventListener('click', handleClickOutside)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('click', handleClickOutside)
 })
 </script>
 
@@ -323,6 +80,7 @@ onUnmounted(() => {
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">Reference Data</h1>
+        <p class="page-subtitle">Manage organization departments and units</p>
       </div>
       <div class="header-right">
         <div class="search-box">
@@ -330,43 +88,10 @@ onUnmounted(() => {
           <input
             v-model="searchKey"
             type="text"
-            :placeholder="`Search ${activeTab}...`"
+            placeholder="Search departments..."
             class="search-input"
           />
         </div>
-        <div v-if="activeTab === 'suppliers'" class="filter-box">
-          <select v-model="statusFilter" class="glass-select">
-            <option value="all">All Status</option>
-            <option value="active">Active Only</option>
-            <option value="inactive">Disabled Only</option>
-          </select>
-        </div>
-        <!-- Hidden file input for xlsx -->
-        <input
-          ref="fileInputRef"
-          type="file"
-          accept=".xlsx,.xls,.csv"
-          style="display: none"
-          @change="onFileSelected"
-        />
-        <button
-          v-if="activeTab === 'suppliers'"
-          class="btn-legend-toggle"
-          :class="{ active: showSupplierLegend }"
-          @click="showSupplierLegend = !showSupplierLegend"
-        >
-          <Info :size="18" />
-          <span>Legend</span>
-        </button>
-
-        <button
-          v-if="activeTab === 'suppliers'"
-          class="btn-import glint"
-          @click="triggerExcelImport"
-        >
-          <Upload :size="18" />
-          <span>Import Excel</span>
-        </button>
         <button class="btn-primary glint" @click="openAddModal">
           <Plus :size="18" />
           <span>Add New</span>
@@ -375,79 +100,12 @@ onUnmounted(() => {
     </header>
 
     <div class="tabs-container">
-      <button
-        class="tab-btn"
-        :class="{ active: activeTab === 'departments' }"
-        @click="activeTab = 'departments'"
-      >
+      <div class="tab-btn active">
         <Building2 :size="18" />
         <span>Departments</span>
         <span class="count-chip">{{ departments.length }}</span>
-      </button>
-      <button
-        class="tab-btn"
-        :class="{ active: activeTab === 'suppliers' }"
-        @click="activeTab = 'suppliers'"
-      >
-        <Truck :size="18" />
-        <span>Suppliers</span>
-        <span class="count-chip">{{ suppliers.length }}</span>
-      </button>
-    </div>
-
-    <!-- Supplier Registry Legend (Styled after "How to Read the Log") -->
-    <Transition name="legend-fade">
-      <div v-if="activeTab === 'suppliers' && showSupplierLegend" class="registry-legend-popover" @click.stop>
-        <div class="legend-popover-header">
-          <div class="legend-header-main">
-            <h3 class="legend-popover-title">SUPPLIER REGISTRY GUIDE</h3>
-            <span v-if="newSuppliersCount > 0" class="pending-popover-badge">
-              {{ newSuppliersCount }} Review{{ newSuppliersCount > 1 ? 's' : '' }} Pending
-            </span>
-          </div>
-          <button class="btn-close-legend" @click="showSupplierLegend = false">
-            <X :size="16" />
-          </button>
-        </div>
-        
-        <div class="legend-popover-content">
-          <div class="legend-popover-section">
-            <h4 class="legend-popover-sub">Visual Markers</h4>
-            <div class="legend-popover-item">
-              <div class="popover-marker-wrap">
-                <span class="dot-gold-pulse"></span>
-              </div>
-              <div class="popover-item-info">
-                <span class="popover-label">NEW / Pending Review</span>
-                <p class="popover-desc">Newly onboarded or incomplete profiles. Pinned to top for immediate attention.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="legend-popover-section">
-            <h4 class="legend-popover-sub">Quick Actions</h4>
-            <div class="legend-popover-item">
-              <div class="popover-marker-wrap">
-                <Check :size="14" class="icon-success" />
-              </div>
-              <div class="popover-item-info">
-                <span class="popover-label">Mark Reviewed</span>
-                <p class="popover-desc">Confirms details are verified. Removes the NEW status and pinning.</p>
-              </div>
-            </div>
-            <div class="legend-popover-item">
-              <div class="popover-marker-wrap">
-                <Edit2 :size="14" class="icon-muted" />
-              </div>
-              <div class="popover-item-info">
-                <span class="popover-label">Complete Profile</span>
-                <p class="popover-desc">Update missing contact person, email, or address information.</p>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
-    </Transition>
+    </div>
 
     <div class="main-content">
       <div v-if="loading" class="loading-state">
@@ -457,7 +115,7 @@ onUnmounted(() => {
 
       <template v-else>
         <!-- DEPARTMENTS VIEW -->
-        <div v-if="activeTab === 'departments'" class="grid-layout">
+        <div class="grid-layout">
           <div v-for="dept in filteredDepartments" :key="dept.id" class="data-card">
             <div class="card-body">
               <div class="card-icon"><Building2 :size="24" /></div>
@@ -478,82 +136,8 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- SUPPLIERS VIEW (Elite Table) -->
-        <div v-if="activeTab === 'suppliers'" class="table-section">
-          <div class="table-container custom-scrollbar">
-            <table class="elite-table">
-              <thead>
-                <tr>
-                  <th class="col-name">Supplier Name</th>
-                  <th class="col-contact">Contact Person</th>
-                  <th class="col-info">Email & Phone</th>
-                  <th class="col-addr">Address</th>
-                  <th class="col-stat">Status</th>
-                  <th class="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="s in paginatedSuppliers" :key="s.id" class="table-row-elite" :class="{ 'is-pinned': s.isNew }">
-                  <td class="col-name font-bold">
-                    <div class="name-with-badge">
-                      {{ s.name }}
-                      <span v-if="s.isNew || (!s.contactPerson && !s.phone && !s.email)" class="badge-new">NEW</span>
-                    </div>
-                  </td>
-                  <td class="col-contact">{{ s.contactPerson || '—' }}</td>
-                  <td class="col-info">
-                    <div class="meta-stack">
-                      <span v-if="s.email" class="meta-tag">{{ s.email }}</span>
-                      <span v-if="s.phone" class="meta-tag">{{ s.phone }}</span>
-                    </div>
-                  </td>
-                  <td class="col-addr">
-                    <div class="compact-addr" :title="`${s.address1 || ''} ${s.address2 || ''}`">
-                      <p v-if="s.address1">{{ s.address1 }}</p>
-                      <p v-if="s.address2" class="text-muted">{{ s.address2 }}</p>
-                      <span v-if="!s.address1 && !s.address2">—</span>
-                    </div>
-                  </td>
-                  <td class="col-stat">
-                    <span :class="['status-pill', s.isActive ? 'active' : 'inactive']">
-                      {{ s.isActive ? 'Active' : 'Disabled' }}
-                    </span>
-                  </td>
-                  <td class="text-right">
-                    <div class="row-actions">
-                      <button v-if="s.isNew" class="icon-btn mark-reviewed" title="Mark Reviewed" @click="markSupplierReviewed(s)">
-                        <Check :size="16" />
-                      </button>
-                      <button class="icon-btn edit" title="Edit" @click="openEditSupplier(s)">
-                        <Edit2 :size="16" />
-                      </button>
-                      <button
-                        class="icon-btn status"
-                        :title="s.isActive ? 'Disable' : 'Enable'"
-                        @click="toggleSupplierStatus(s)"
-                      >
-                        <XCircle v-if="s.isActive" :size="16" />
-                        <CheckCircle2 v-else :size="16" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <PaginationComponent
-            :current-page="currentPage"
-            :total-pages="totalPages"
-            :page-size="pageSize"
-            :total-items="filteredSuppliers.length"
-            :loading="loading"
-            @page-change="handlePageChange"
-          />
-        </div>
-
         <!-- EMPTY STATE -->
-        <div v-if="(activeTab === 'departments' && filteredDepartments.length === 0) || (activeTab === 'suppliers' && filteredSuppliers.length === 0)" class="empty-state">
+        <div v-if="filteredDepartments.length === 0" class="empty-state">
           <Search :size="48" class="text-slate-300" />
           <h3>No records found</h3>
           <p>Try adjusting your search or add a new entry.</p>
@@ -566,111 +150,23 @@ onUnmounted(() => {
       <div v-if="isAdding" class="modal-overlay" @click.self="isAdding = false">
         <div class="modal-box glass-container">
           <div class="modal-header">
-            <h3>{{ editingId ? 'Edit' : 'Add New' }} {{ activeTab === 'departments' ? 'Department' : 'Supplier' }}</h3>
+            <h3>{{ editingId ? 'Edit' : 'Add New' }} Department</h3>
             <button class="close-btn" @click="isAdding = false">✕</button>
           </div>
           <div class="modal-body">
-            <!-- Dept form -->
-            <div v-if="activeTab === 'departments'" class="form-group">
+            <div class="form-group">
               <label>Department Name</label>
               <input
                 v-model="deptForm.name"
                 placeholder="e.g. TECHNICAL SERVICES DEPARTMENT"
                 class="premium-input"
                 autofocus
+                @keyup.enter="handleAddDept"
               />
               <button class="btn-primary w-full mt-4" @click="handleAddDept">
                 {{ editingId ? 'Update' : 'Create' }} Department
               </button>
             </div>
-
-            <!-- Supplier form -->
-            <div v-if="activeTab === 'suppliers'" class="form-grid">
-              <div class="form-group span-2">
-                <label>Supplier/Business Name</label>
-                <input v-model="supplierForm.name" placeholder="Company Name" class="premium-input" />
-              </div>
-              <div class="form-group">
-                <label>Contact Person</label>
-                <input v-model="supplierForm.contactPerson" placeholder="Full Name" class="premium-input" />
-              </div>
-              <div class="form-group">
-                <label>Phone Number</label>
-                <input v-model="supplierForm.phone" placeholder="+63 9xx..." class="premium-input" />
-              </div>
-              <div class="form-group span-2">
-                <label>Email Address</label>
-                <input v-model="supplierForm.email" placeholder="email@example.com" class="premium-input" />
-              </div>
-              <div class="form-group span-2">
-                <label>Address Line 1</label>
-                <input v-model="supplierForm.address1" placeholder="Street, Barangay" class="premium-input" />
-              </div>
-              <div class="form-group span-2">
-                <label>Address Line 2 (Optional)</label>
-                <input v-model="supplierForm.address2" placeholder="City, Province, ZIP" class="premium-input" />
-              </div>
-              <button class="btn-primary span-2 mt-4" @click="handleAddSupplier">
-                {{ editingId ? 'Update' : 'Register' }} Supplier
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Transition>
-
-    <!-- EXCEL IMPORT PREVIEW MODAL -->
-    <Transition name="modal">
-      <div v-if="showImportModal" class="modal-overlay" @click.self="showImportModal = false">
-        <div class="modal-box import-modal glass-container">
-          <div class="modal-header">
-            <div>
-              <h3>📊 Import Preview</h3>
-              <p class="import-subtitle">{{ importPreview.length }} suppliers found — review before importing</p>
-            </div>
-            <button class="close-btn" @click="showImportModal = false">✕</button>
-          </div>
-          <div v-if="importError" class="import-error">{{ importError }}</div>
-          <div class="import-table-wrap">
-            <table class="import-table">
-              <colgroup>
-                <col style="width: 40px" />
-                <col style="width: 18%" />
-                <col style="width: 13%" />
-                <col style="width: 16%" />
-                <col style="width: 18%" />
-                <col style="width: 18%" />
-                <col style="width: 17%" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Supplier Name</th>
-                  <th>Contact Person</th>
-                  <th>Phone</th>
-                  <th>Email</th>
-                  <th>Address 1</th>
-                  <th>Address 2</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(row, i) in importPreview" :key="i" :class="{ 'row-warning': !row.name }">
-                  <td class="row-num">{{ i + 1 }}</td>
-                  <td class="fw-bold cell-clip">{{ row.name || '⚠ Missing' }}</td>
-                  <td class="cell-clip">{{ row.contactPerson || '—' }}</td>
-                  <td class="cell-clip">{{ row.phone || '—' }}</td>
-                  <td class="cell-clip">{{ row.email || '—' }}</td>
-                  <td class="cell-clip">{{ row.address1 || '—' }}</td>
-                  <td class="cell-clip">{{ row.address2 || '—' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="import-footer">
-            <button class="btn-cancel" @click="showImportModal = false">Cancel</button>
-            <button class="btn-primary" :disabled="importLoading" @click="confirmImport">
-              {{ importLoading ? 'Importing...' : `✓ Import ${importPreview.length} Suppliers` }}
-            </button>
           </div>
         </div>
       </div>
@@ -682,7 +178,6 @@ onUnmounted(() => {
 .jinja {
   --p-primary: #0ea5e9;
   --p-border: #e2e8f0;
-  --p-card-bg: rgba(255, 255, 255, 0.6);
   --p-text: #1e293b;
   --p-muted: #64748b;
 }
@@ -753,7 +248,6 @@ onUnmounted(() => {
   box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
 }
 
-/* Tabs */
 .tabs-container {
   display: flex;
   gap: 0.5rem;
@@ -770,16 +264,8 @@ onUnmounted(() => {
   padding: 0.625rem 1.25rem;
   border-radius: 8px;
   background: transparent;
-  border: none;
-  cursor: pointer;
   color: var(--p-muted);
   font-weight: 600;
-  transition: all 0.2s;
-}
-
-.tab-btn:hover {
-  background: rgba(14, 165, 233, 0.05);
-  color: var(--p-primary);
 }
 
 .tab-btn.active {
@@ -796,13 +282,9 @@ onUnmounted(() => {
   border-radius: 999px;
 }
 
-/* Content Area */
 .main-content {
   flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .grid-layout {

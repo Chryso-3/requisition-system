@@ -78,8 +78,7 @@ const filteredRequisitions = computed(() => {
     if (filterStatus.value === 'pending') {
       // 'pending' is a sentinel meaning any pending_* status
       list = list.filter((r) => (r.status || '').startsWith('pending_'))
-    } else if (filterStatus.value !== 'received') {
-      // 'received' is handled by purchaseStatus on the Firestore side; skip client filter
+    } else {
       list = list.filter((r) => r.status === filterStatus.value)
     }
   }
@@ -217,9 +216,7 @@ function startRealtime() {
   const filters = isGlobalRole.value ? {} : { requestedBy: authStore?.user?.uid }
 
   if (filterStatus.value) {
-    if (filterStatus.value === 'received') {
-      filters.purchaseStatus = 'received'
-    } else if (filterStatus.value !== 'pending') {
+    if (filterStatus.value !== 'pending') {
       filters.status = filterStatus.value
     }
   }
@@ -250,9 +247,7 @@ async function loadMore() {
   try {
     const filters = isGlobalRole.value ? {} : { requestedBy: authStore?.user?.uid }
     if (filterStatus.value) {
-      if (filterStatus.value === 'received') {
-        filters.purchaseStatus = 'received'
-      } else if (filterStatus.value !== 'pending') {
+      if (filterStatus.value !== 'pending') {
         filters.status = filterStatus.value
       }
     }
@@ -469,7 +464,6 @@ onUnmounted(() => {
           <div class="filter-group">
             <select v-model="filterStatus" class="premium-select">
               <option value="">All Workflow Status</option>
-              <option value="received">✅ Received (Finished Product)</option>
               <option v-for="(label, key) in statusLabel" :key="key" :value="key">
                 {{ label }}
               </option>
@@ -499,7 +493,6 @@ onUnmounted(() => {
                     <th>Department</th>
                     <th>Purpose</th>
                     <th>Status</th>
-                    <th>Purchase</th>
                     <th>Currently at</th>
                     <th>Items</th>
                     <th></th>
@@ -545,17 +538,6 @@ onUnmounted(() => {
                       <span :class="['status-badge', r.status]">{{
                         statusLabel[r.status] || r.status
                       }}</span>
-                    </td>
-                    <td>
-                      <template v-if="r.status === REQUISITION_STATUS.APPROVED">
-                        <span :class="['purchase-badge', r.purchaseStatus || 'pending']">
-                          {{
-                            (r.purchaseStatus || 'pending').charAt(0).toUpperCase() +
-                            (r.purchaseStatus || 'pending').slice(1)
-                          }}
-                        </span>
-                      </template>
-                      <span v-else class="text-muted small">—</span>
                     </td>
                     <td class="current-step-cell">{{ getCurrentStep(r) }}</td>
                     <td class="text-center">{{ (r.items || []).length }}</td>
@@ -936,9 +918,7 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-/* Status Badges */
-.status-badge,
-.purchase-badge {
+.status-badge {
   display: inline-flex;
   align-items: center;
   padding: 0.25rem 0.625rem;
@@ -968,20 +948,6 @@ onUnmounted(() => {
 .status-badge.rejected {
   background: #fef2f2;
   color: #991b1b;
-}
-
-.purchase-badge.pending {
-  background: #fff7ed;
-  color: #9a3412;
-}
-.purchase-badge.ordered {
-  background: #eff6ff;
-  color: #1e40af;
-}
-.purchase-badge.received {
-  background: #f0fdf4;
-  color: #166534;
-  border: 1px solid rgba(22, 101, 52, 0.1);
 }
 
 .btn-workflow {

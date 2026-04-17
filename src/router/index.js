@@ -5,11 +5,9 @@ import { USER_ROLES } from '@/firebase/collections'
 
 function defaultPathForRole(role) {
   if (role === USER_ROLES.REQUESTER) return '/my-requisitions'
-  if (role === USER_ROLES.PURCHASER) return '/procurement-hub'
-  if (role === USER_ROLES.BAC_SECRETARY) return '/bac-dashboard'
   if (role === USER_ROLES.SUPER_ADMIN) return '/admin/users'
 
-  // For other specific approver roles, all-requisitions is the hub
+  // For all approver roles, all-requisitions is the hub
   const approverRoles = [
     USER_ROLES.SECTION_HEAD,
     USER_ROLES.DIVISION_HEAD,
@@ -133,43 +131,7 @@ const router = createRouter({
           component: () => import('@/views/AnalyticsView.vue'),
           meta: { roles: [USER_ROLES.GENERAL_MANAGER] },
         },
-        {
-          path: 'procurement-hub',
-          name: 'procurement-hub',
-          component: () => import('@/views/ProcurementHubView.vue'),
-          meta: { roles: [USER_ROLES.PURCHASER] },
-        },
-        {
-          path: 'purchase-list',
-          name: 'purchase-list',
-          component: () => import('@/views/PurchaseListView.vue'),
-          meta: { roles: [USER_ROLES.PURCHASER] },
-        },
-        {
-          path: 'canvass-orders',
-          name: 'canvass-orders',
-          component: () => import('@/views/CanvassListView.vue'),
-          meta: { roles: [USER_ROLES.PURCHASER] },
-        },
-        {
-          path: 'po-approvals',
-          name: 'po-approvals',
-          component: () => import('@/views/POApprovalsView.vue'),
-          meta: {
-            roles: [
-              USER_ROLES.BUDGET_OFFICER,
-              USER_ROLES.INTERNAL_AUDITOR,
-              USER_ROLES.GENERAL_MANAGER,
-              USER_ROLES.PURCHASER,
-            ],
-          },
-        },
-        {
-          path: 'bac-dashboard',
-          name: 'bac-dashboard',
-          component: () => import('@/views/BACListView.vue'),
-          meta: { roles: [USER_ROLES.BAC_SECRETARY] },
-        },
+
         {
           path: 'profile',
           name: 'profile',

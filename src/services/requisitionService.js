@@ -29,9 +29,6 @@ export const REQUISITION_LIST_LIMIT = 5000
 import {
   COLLECTIONS,
   REQUISITION_STATUS,
-  PURCHASE_STATUS,
-  CANVASS_STATUS,
-  PO_STATUS,
   USER_ROLES,
 } from '../firebase/collections'
 
@@ -247,8 +244,7 @@ export async function seedAnalyticsSummary() {
     byStatus: {},
     byDepartment: {},
     byMonth: {},
-    purchaseBreakdown: { pending: 0, ordered: 0, received: 0 },
-    poByStatus: {},
+    totalApprovedValue: 0,
     totalApprovedValue: 0,
     departmentalSpend: {},
     durations: {},
@@ -301,9 +297,6 @@ export async function seedAnalyticsSummary() {
           leadTimeCount: 0,
           byStatus: {},
           byDepartment: {},
-          poByStatus: {},
-          durations: {},
-          purchaseBreakdown: { pending: 0, ordered: 0, received: 0 },
           departmentalSpend: {},
         }
       }
@@ -320,7 +313,7 @@ export async function seedAnalyticsSummary() {
         : null
 
     // Financials & Purchase
-    const isRel = s === REQUISITION_STATUS.APPROVED || r.purchaseStatus === PURCHASE_STATUS.RECEIVED
+    const isRel = s === REQUISITION_STATUS.APPROVED
     if (isRel) {
       const val = (r.items || []).reduce(
         (sum, i) => sum + (parseFloat(i.quantity) || 0) * (parseFloat(i.unitPrice) || 0),
@@ -340,9 +333,7 @@ export async function seedAnalyticsSummary() {
             leadTimeCount: 0,
             byStatus: {},
             byDepartment: {},
-            poByStatus: {},
             durations: {},
-            purchaseBreakdown: { pending: 0, ordered: 0, received: 0 },
             departmentalSpend: {},
           }
         }
@@ -371,26 +362,6 @@ export async function seedAnalyticsSummary() {
         summary.byMonth[archMonthKey].approved++
       }
 
-      const ps = r.purchaseStatus || PURCHASE_STATUS.PENDING
-      summary.purchaseBreakdown[ps] = (summary.purchaseBreakdown[ps] || 0) + 1
-      if (archMonthKey) {
-        if (!summary.byMonth[archMonthKey].purchaseBreakdown) {
-          summary.byMonth[archMonthKey].purchaseBreakdown = { pending: 0, ordered: 0, received: 0 }
-        }
-        summary.byMonth[archMonthKey].purchaseBreakdown[ps] =
-          (summary.byMonth[archMonthKey].purchaseBreakdown[ps] || 0) + 1
-      }
-
-      const pos = r.poStatus || null
-      if (pos) {
-        summary.poByStatus[pos] = (summary.poByStatus[pos] || 0) + 1
-        if (archMonthKey) {
-          if (!summary.byMonth[archMonthKey].poByStatus)
-            summary.byMonth[archMonthKey].poByStatus = {}
-          summary.byMonth[archMonthKey].poByStatus[pos] =
-            (summary.byMonth[archMonthKey].poByStatus[pos] || 0) + 1
-        }
-      }
     } else if (s === REQUISITION_STATUS.REJECTED) {
       totalRejectedCount++
       // Use archMonthKey for summary rejected this month
@@ -480,33 +451,6 @@ export async function seedAnalyticsSummary() {
         start: r.checkedBy?.signedAt || r.budgetApproved?.signedAt || fallbackStart,
         end: r.approvedBy?.signedAt,
       },
-      {
-        key: 'gm_to_fulfillment',
-        start: r.approvedBy?.signedAt || r.checkedBy?.signedAt || fallbackStart,
-        end: r.receivedAt || r.archivedAt,
-      },
-
-      // PO Approval Workflow Durations
-      {
-        key: 'req_appr_to_po_issue',
-        start: r.approvedBy?.signedAt || fallbackStart,
-        end: r.orderedAt,
-      },
-      {
-        key: 'po_issue_to_po_budget',
-        start: r.orderedAt || r.approvedBy?.signedAt || fallbackStart,
-        end: r.poBudgetApproved?.signedAt,
-      },
-      {
-        key: 'po_budget_to_po_audit',
-        start: r.poBudgetApproved?.signedAt || r.orderedAt || fallbackStart,
-        end: r.poAuditApproved?.signedAt,
-      },
-      {
-        key: 'po_audit_to_po_gm',
-        start: r.poAuditApproved?.signedAt || r.poBudgetApproved?.signedAt || fallbackStart,
-        end: r.poGMApproved?.signedAt,
-      },
     ]
 
     stages.forEach((stage) => {
@@ -551,25 +495,6 @@ export async function seedAnalyticsSummary() {
           isInThisStage = true
         else if (stage.key === 'audit_to_gm' && s === REQUISITION_STATUS.PENDING_APPROVAL)
           isInThisStage = true
-        else if (
-          stage.key === 'gm_to_fulfillment' &&
-          s === REQUISITION_STATUS.APPROVED &&
-          (r.purchaseStatus || PURCHASE_STATUS.PENDING) === PURCHASE_STATUS.PENDING
-        )
-          isInThisStage = true
-        else if (
-          stage.key === 'req_appr_to_po_issue' &&
-          s === REQUISITION_STATUS.APPROVED &&
-          !r.poStatus
-        )
-          isInThisStage = true
-        else if (stage.key === 'po_issue_to_po_budget' && r.poStatus === PO_STATUS.PENDING_BUDGET)
-          isInThisStage = true
-        else if (stage.key === 'po_budget_to_po_audit' && r.poStatus === PO_STATUS.PENDING_AUDIT)
-          isInThisStage = true
-        else if (stage.key === 'po_audit_to_po_gm' && r.poStatus === PO_STATUS.PENDING_GM)
-          isInThisStage = true
-
         if (isInThisStage) {
           summary.durations[stage.key].activeTotalMs += Math.max(0, now - start)
           summary.durations[stage.key].activeCount++
@@ -633,64 +558,6 @@ export async function upsertRequisitionSignature(requisitionId, roleKey, data) {
   return sigId
 }
 
-/**
- * Save a single quote document (Base64) to Firestore.
- */
-export async function upsertRequisitionQuote(requisitionId, name, base64) {
-  if (!requisitionId || !base64) return
-  const quoteId = `${requisitionId}_${name}`
-  const ref = doc(db, COLLECTIONS.REQUISITION_QUOTES, quoteId)
-  await setDoc(
-    ref,
-    {
-      requisitionId,
-      name,
-      base64,
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  )
-}
-
-/** Fetch all quotes for a requisition. */
-export async function getRequisitionQuotes(requisitionId) {
-  if (!requisitionId) return []
-  const q = query(
-    collection(db, COLLECTIONS.REQUISITION_QUOTES),
-    where('requisitionId', '==', requisitionId),
-  )
-  const snap = await getDocs(q)
-  const results = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-  // Sort client-side to avoid mandatory composite index
-  return results.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-}
-
-/** Subscribe to quote docs for a requisition. */
-export function subscribeRequisitionQuotes(requisitionId, onData, onError) {
-  if (!requisitionId) return () => {}
-  const q = query(
-    collection(db, COLLECTIONS.REQUISITION_QUOTES),
-    where('requisitionId', '==', requisitionId),
-  )
-  return subscribeWithFallback(
-    q,
-    true,
-    (snapshot) => {
-      const results = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-      // Robustness: Filter by unique name to avoid orphaned duplicates
-      const uniqueMap = {}
-      for (const item of results) {
-        if (!uniqueMap[item.name]) {
-          uniqueMap[item.name] = item
-        }
-      }
-      const finalResults = Object.values(uniqueMap)
-      // Sort client-side
-      onData(finalResults.sort((a, b) => (a.name || '').localeCompare(b.name || '')))
-    },
-    onError,
-  )
-}
 
 /** Load all signature docs for a requisition. Returns map by roleKey. */
 export async function getRequisitionSignatures(requisitionId) {
@@ -754,19 +621,8 @@ export const createRequisition = (data = {}) => ({
   department: data.department ?? '',
   purpose: data.purpose ?? '',
   status: data.status ?? REQUISITION_STATUS.DRAFT,
-  pbacFormNo: data.pbacFormNo ?? '',
-
   // Requested items (array of items)
   items: (data.items ?? []).map(createRequisitionItem),
-
-  // Purchase Order specific extension
-  supplier: data.supplier ?? '',
-  poNumber: data.poNumber ?? '',
-  poStatus: data.poStatus ?? null,
-  orderedAt: data.orderedAt ?? null,
-  orderedBy: data.orderedBy ?? null,
-  purchaseStatus: data.purchaseStatus ?? null,
-  canvassStatus: data.canvassStatus ?? null,
 
   // Approval workflow - user IDs and timestamps
   assignedApproverId: data.assignedApproverId ?? null,
@@ -808,55 +664,7 @@ export async function generateRfControlNo() {
   })
 }
 
-/**
- * Generate Canvass Number (e.g., CO-2024-001) via atomic counter.
- * Format: CO-[YEAR]-[NUMBER]
- */
-export async function generateCanvassNo() {
-  const year = new Date().getFullYear()
-  const counterRef = doc(db, 'counters', `canvassNo_${year}`)
-  return runTransaction(db, async (tx) => {
-    const snap = await tx.get(counterRef)
-    const lastNo = snap.exists() ? snap.data().lastNo || 0 : 0
-    const nextNo = lastNo + 1
-    await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
-    return `CO-${year}-${String(nextNo).padStart(6, '0')}`
-  })
-}
-
-/**
- * Generate PBAC Form 01 Serial Number (e.g., PBAC-01-2024-0001) via atomic counter.
- * Format: PBAC-01-[YEAR]-[NUMBER]
- */
-export async function generatePbacFormNo() {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const counterRef = doc(db, 'counters', `pbacFormNo_${year}`)
-  return runTransaction(db, async (tx) => {
-    const snap = await tx.get(counterRef)
-    const lastNo = snap.exists() ? snap.data().lastNo || 0 : 0
-    const nextNo = lastNo + 1
-    await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
-    return `PBAC-${month}-${year}-${String(nextNo).padStart(4, '0')}`
-  })
-}
-
-/**
- * Generate Purchase Order Number (e.g., PO-2024-001) via atomic counter.
- * Format: PO-[YEAR]-[NUMBER]
- */
-export async function generatePoNo() {
-  const year = new Date().getFullYear()
-  const counterRef = doc(db, 'counters', `poNo_${year}`)
-  return runTransaction(db, async (tx) => {
-    const snap = await tx.get(counterRef)
-    const lastNo = snap.exists() ? snap.data().lastNo || 0 : 0
-    const nextNo = lastNo + 1
-    await tx.set(counterRef, { lastNo: nextNo }, { merge: true })
-    return `PO-${year}-${String(nextNo).padStart(6, '0')}`
-  })
-}
+// Legacy PO/Canvass generator functions removed
 
 /**
  * Create a new requisition
@@ -958,588 +766,7 @@ export async function deleteRequisition(id) {
   await deleteDoc(docRef)
 }
 
-/**
- * Mark an approved requisition as ordered (Purchaser). Sets purchaseStatus, orderedAt, orderedBy, poNumber.
- */
-export async function markRequisitionOrdered(
-  requisitionId,
-  { poNumber, orderedAt, orderedBy, supplier, items, signatureData },
-) {
-  const current = await getRequisition(requisitionId)
-  if (!current || current.status !== REQUISITION_STATUS.APPROVED) {
-    throw new Error('Requisition is not approved.')
-  }
-  if (
-    current.canvassStatus !== CANVASS_STATUS.ORDER_CREATED &&
-    current.canvassStatus !== CANVASS_STATUS.SUBMITTED_TO_BAC
-  ) {
-    throw new Error('Canvass must be completed and submitted before creating a Purchase Order.')
-  }
-  const at = orderedAt
-    ? orderedAt instanceof Date
-      ? orderedAt.toISOString()
-      : orderedAt
-    : new Date().toISOString()
-
-  const updates = {
-    // We intentionally DO NOT set purchaseStatus: PURCHASE_STATUS.ORDERED yet.
-    // That happens only AFTER the PO is fully approved.
-    poStatus: PO_STATUS.PENDING_BUDGET,
-    orderedAt: at,
-    orderedBy: orderedBy ?? null,
-    poNumber: poNumber ?? (current.poNumber || ''),
-    supplier: supplier ?? (current.supplier || ''),
-  }
-
-  if (items && Array.isArray(items)) {
-    updates.items = items.map(createRequisitionItem)
-  }
-
-  await updateRequisition(requisitionId, updates)
-
-  // Save e-signature if provided
-  if (orderedBy && signatureData) {
-    await upsertRequisitionSignature(requisitionId, 'orderedBy', {
-      userId: orderedBy.userId,
-      name: orderedBy.name,
-      title: orderedBy.role === USER_ROLES.BAC_SECRETARY ? 'BAC Secretary' : 'Purchaser',
-      signedAt: at,
-      signatureData,
-    })
-  }
-
-  // Log the purchaser action
-  const snapshot = {
-    statusBefore: current.status,
-    statusAfter: current.status, // Status remains APPROVED
-    rfControlNo: current.rfControlNo ?? '',
-    purpose: (current.purpose ?? '').slice(0, 200),
-    // We explicitly do NOT set purchaseStatus: PURCHASE_STATUS.ORDERED here
-    // as it's not actually ordered yet until GM approves.
-    poNumber: poNumber ?? (current.poNumber || ''),
-  }
-  await appendTransactionLog(
-    requisitionId,
-    {
-      action: 'po_issued',
-      userId: orderedBy?.userId ?? '',
-      name: orderedBy?.name ?? 'BAC Secretary / Purchaser',
-      title: orderedBy?.role === USER_ROLES.BAC_SECRETARY ? 'BAC Secretary' : 'Purchaser',
-      email: orderedBy?.email ?? '',
-      step: 'purchase_order',
-    },
-    snapshot,
-  )
-
-  // Notification: Notify Budget Officer + Inform Requestor
-  try {
-    const reqWithEmail = await ensureRequestorEmail(current)
-    const budgetEmails = await getEmailsByRole(USER_ROLES.BUDGET_OFFICER)
-    if (budgetEmails.length > 0) {
-      await notificationService.notifyPOAction(reqWithEmail, 'Budget Officer', budgetEmails)
-    }
-    // Inform the requestor their item is now in the PO approval stage
-    await notificationService.notifyRequestorUpdate(
-      reqWithEmail,
-      'Step Approved',
-      '',
-      'PO Budget Review',
-    )
-  } catch (e) {
-    console.error('PO Creation notification error:', e)
-  }
-
-  return getRequisition(requisitionId)
-}
-
-/**
- * Budget Officer approves the PO (Certifies Funds Available).
- * Moves poStatus from PENDING_BUDGET -> PENDING_AUDIT.
- */
-export async function approvePOBudget(requisitionId, user, signatureData) {
-  const current = await getRequisition(requisitionId)
-  if (!current || current.poStatus !== PO_STATUS.PENDING_BUDGET) {
-    throw new Error('Requisition is not pending Budget PO approval.')
-  }
-  // Build updates object
-  const updates = {
-    poStatus: PO_STATUS.PENDING_AUDIT,
-  }
-
-  // Save e-signature if provided
-  if (user && signatureData) {
-    const sigInfo = {
-      userId: user.uid,
-      name: user.displayName || user.name || 'Budget Officer',
-      title: 'Budget Officer',
-      signedAt: new Date().toISOString(),
-      signatureData,
-    }
-    await upsertRequisitionSignature(requisitionId, 'poBudgetApproved', sigInfo)
-
-    // Add to single updates object
-    updates.poBudgetApproved = {
-      userId: sigInfo.userId,
-      name: sigInfo.name,
-      signedAt: sigInfo.signedAt,
-    }
-  }
-
-  // Single Firestore update to avoid permission race conditions
-  await updateRequisition(requisitionId, updates)
-  if (user) {
-    await appendTransactionLog(
-      requisitionId,
-      {
-        action: 'po_approved',
-        userId: user.uid,
-        name: user.displayName || user.name || 'Budget Officer',
-        title: 'Budget Officer',
-        email: user.email,
-        step: 'po_budget',
-      },
-      {
-        poStatusBefore: current.poStatus,
-        poStatusAfter: PO_STATUS.PENDING_AUDIT,
-        rfControlNo: current.rfControlNo ?? '',
-        purpose: (current.purpose ?? '').slice(0, 200),
-      },
-    )
-
-    // Notification: Notify Internal Auditor for PO Review + Update Requestor
-    try {
-      const reqWithEmail = await ensureRequestorEmail(current)
-      const auditorEmails = await getEmailsByRole(USER_ROLES.INTERNAL_AUDITOR)
-      if (auditorEmails.length > 0) {
-        await notificationService.notifyPOAction(reqWithEmail, 'Internal Audit', auditorEmails)
-      }
-      // Keep requestor in the loop
-      await notificationService.notifyRequestorUpdate(
-        reqWithEmail,
-        'Step Approved',
-        '',
-        'Internal Audit',
-      )
-    } catch (e) {
-      console.error('PO Budget approval notification error:', e)
-    }
-  }
-}
-
-/**
- * Internal Auditor pre-audits the PO.
- * Moves poStatus from PENDING_AUDIT -> PENDING_GM.
- */
-export async function approvePOAudit(requisitionId, user, signatureData) {
-  const current = await getRequisition(requisitionId)
-  if (!current || current.poStatus !== PO_STATUS.PENDING_AUDIT) {
-    throw new Error('Requisition is not pending Audit PO approval.')
-  }
-  // Build updates object
-  const updates = {
-    poStatus: PO_STATUS.PENDING_GM,
-  }
-
-  // Save e-signature if provided
-  if (user && signatureData) {
-    const sigInfo = {
-      userId: user.uid,
-      name: user.displayName || user.name || 'Internal Audit Dept. Manager',
-      title: 'Internal Audit Dept. Manager',
-      signedAt: new Date().toISOString(),
-      signatureData,
-    }
-    await upsertRequisitionSignature(requisitionId, 'poAuditApproved', sigInfo)
-
-    // Add to single updates object
-    updates.poAuditApproved = {
-      userId: sigInfo.userId,
-      name: sigInfo.name,
-      signedAt: sigInfo.signedAt,
-    }
-  }
-
-  // Single Firestore update to avoid permission race conditions
-  await updateRequisition(requisitionId, updates)
-  if (user) {
-    await appendTransactionLog(
-      requisitionId,
-      {
-        action: 'po_approved',
-        userId: user.uid,
-        name: user.displayName || user.name || 'Internal Auditor',
-        title: 'Internal Auditor',
-        email: user.email,
-        step: 'po_audit',
-      },
-      {
-        poStatusBefore: current.poStatus,
-        poStatusAfter: PO_STATUS.PENDING_GM,
-        rfControlNo: current.rfControlNo ?? '',
-        purpose: (current.purpose ?? '').slice(0, 200),
-      },
-    )
-
-    // Notification: Notify GM for PO Review + Update Requestor
-    try {
-      const reqWithEmail = await ensureRequestorEmail(current)
-      const gmEmails = await getEmailsByRole(USER_ROLES.GENERAL_MANAGER)
-      if (gmEmails.length > 0) {
-        await notificationService.notifyPOAction(reqWithEmail, 'General Manager', gmEmails)
-      }
-      // Keep requestor in the loop
-      await notificationService.notifyRequestorUpdate(
-        reqWithEmail,
-        'Step Approved',
-        '',
-        'General Manager',
-      )
-    } catch (e) {
-      console.error('PO Audit approval notification error:', e)
-    }
-  }
-}
-
-/**
- * General Manager approves the PO.
- * Moves poStatus from PENDING_GM -> APPROVED.
- * Automatically marks the Purchase Status as ORDERED.
- */
-export async function approvePOGM(requisitionId, user, signatureData) {
-  const current = await getRequisition(requisitionId)
-  if (!current || current.poStatus !== PO_STATUS.PENDING_GM) {
-    throw new Error('Requisition is not pending GM PO approval.')
-  }
-  // Build updates object
-  const updates = {
-    poStatus: PO_STATUS.APPROVED,
-    purchaseStatus: PURCHASE_STATUS.ORDERED, // Final GM approval implicitly marks it as ordered
-  }
-
-  // Save e-signature if provided
-  if (user && signatureData) {
-    const sigInfo = {
-      userId: user.uid,
-      name: user.displayName || user.name || 'General Manager',
-      title: 'General Manager',
-      signedAt: new Date().toISOString(),
-      signatureData,
-    }
-    await upsertRequisitionSignature(requisitionId, 'poGMApproved', sigInfo)
-
-    // Add to single updates object
-    updates.poGMApproved = {
-      userId: sigInfo.userId,
-      name: sigInfo.name,
-      signedAt: sigInfo.signedAt,
-    }
-  }
-
-  // Single Firestore update to avoid permission race conditions
-  await updateRequisition(requisitionId, updates)
-  if (user) {
-    await appendTransactionLog(
-      requisitionId,
-      {
-        action: 'po_approved',
-        userId: user.uid,
-        name: user.displayName || user.name || 'General Manager',
-        title: 'General Manager',
-        email: user.email,
-        step: 'po_gm',
-      },
-      {
-        poStatusBefore: current.poStatus,
-        poStatusAfter: PO_STATUS.APPROVED,
-        rfControlNo: current.rfControlNo ?? '',
-        purpose: (current.purpose ?? '').slice(0, 200),
-      },
-    )
-
-    // Notification: Notify BAC Secretary (Ready to Print), Purchaser (for delivery), and Requestor
-    try {
-      const reqWithEmail = await ensureRequestorEmail(current)
-      // Notify BAC Secretary the PO is fully signed
-      const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
-      if (bacEmails.length > 0) {
-        await notificationService.notifyPOAction(reqWithEmail, 'BAC Secretary', bacEmails)
-      }
-      // Notify Purchaser to proceed with receiving delivery
-      const purchaserEmails = await getEmailsByRole(USER_ROLES.PURCHASER)
-      if (purchaserEmails.length > 0) {
-        await notificationService.notifyNextApprover(
-          reqWithEmail,
-          'Purchaser (For Delivery)',
-          purchaserEmails,
-        )
-      }
-      // Notify the requestor the PO is fully approved
-      await notificationService.notifyRequestorUpdate(reqWithEmail, 'po_approved')
-    } catch (e) {
-      console.error('PO GM approval notification error:', e)
-    }
-  }
-}
-
-/**
- * Any PO approver (Budget Officer, Internal Auditor, General Manager) can reject a PO.
- * Sets poStatus to REJECTED and logs the action with the provided remarks.
- */
-export async function rejectPO(requisitionId, user, { remarks, step }) {
-  if (!remarks || !remarks.trim()) {
-    throw new Error('A rejection reason is required.')
-  }
-  const current = await getRequisition(requisitionId)
-  if (!current) {
-    throw new Error('Requisition not found.')
-  }
-  const poStatusBefore = current.poStatus
-  await updateRequisition(requisitionId, {
-    poStatus: PO_STATUS.REJECTED,
-    poRejectedAt: new Date().toISOString(),
-    poRejectedBy: user
-      ? { userId: user.uid, name: user.displayName || user.name, email: user.email }
-      : null,
-    poRejectionRemarks: remarks.trim(),
-    isArchived: true,
-    archivedAt: serverTimestamp(),
-  })
-  if (user) {
-    await appendTransactionLog(
-      requisitionId,
-      {
-        action: 'po_rejected',
-        userId: user.uid,
-        name: user.displayName || user.name || 'Approver',
-        title: step || 'Approver',
-        email: user.email,
-        step: step || 'po_review',
-        remarks: remarks.trim(),
-      },
-      {
-        poStatusBefore,
-        poStatusAfter: PO_STATUS.REJECTED,
-        rfControlNo: current.rfControlNo ?? '',
-        purpose: (current.purpose ?? '').slice(0, 200),
-      },
-    )
-
-    // Notification: Notify BAC Secretary of PO Rejection
-    try {
-      const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
-      if (bacEmails.length > 0) {
-        await notificationService.notifyPOAction(current, 'Correction Needed', bacEmails)
-      }
-    } catch (e) {
-      console.error('PO rejection notification error:', e)
-    }
-  }
-}
-
-/**
- * Mark an approved requisition as canvassed (Purchaser). Sets canvassStatus, canvassDate, canvassNumber.
- */
-export async function markRequisitionCanvassed(
-  requisitionId,
-  { canvassNumber, canvassDate, canvassBy, supplier, items, signatureData, hasQuotes },
-) {
-  const current = await getRequisition(requisitionId)
-  if (!current || current.status !== REQUISITION_STATUS.APPROVED) {
-    throw new Error('Requisition is not approved.')
-  }
-  const at = canvassDate
-    ? canvassDate instanceof Date
-      ? canvassDate.toISOString()
-      : canvassDate
-    : new Date().toISOString()
-
-  const updates = {
-    canvassStatus: CANVASS_STATUS.SUBMITTED_TO_BAC,
-    canvassDate: at,
-    canvassBy: canvassBy ?? null,
-    canvassNumber: canvassNumber ?? '',
-    submittedToBACAt: at,
-    submittedToBACBy: canvassBy ?? null,
-    hasQuotes: true,
-  }
-
-  if (supplier) updates.supplier = supplier
-  if (items && Array.isArray(items)) {
-    updates.items = items.map(createRequisitionItem)
-  }
-
-  await updateRequisition(requisitionId, updates)
-
-  // Save e-signature if provided
-  if (canvassBy && signatureData) {
-    await upsertRequisitionSignature(requisitionId, 'canvassBy', {
-      userId: canvassBy.userId,
-      name: canvassBy.name,
-      title: 'Purchaser / Canvasser',
-      signedAt: at,
-      signatureData,
-    })
-  }
-
-  // Log the canvass action
-  const snapshot = {
-    statusBefore: current.status,
-    statusAfter: current.status, // Status remains APPROVED
-    rfControlNo: current.rfControlNo ?? '',
-    purpose: (current.purpose ?? '').slice(0, 200),
-    canvassStatus: CANVASS_STATUS.SUBMITTED_TO_BAC,
-    canvassNumber: canvassNumber ?? '',
-  }
-  await appendTransactionLog(
-    requisitionId,
-    {
-      action: 'canvassed',
-      userId: canvassBy?.userId ?? '',
-      name: canvassBy?.name ?? 'Purchaser / Canvasser',
-      title: 'Purchaser',
-      email: canvassBy?.email ?? '',
-      step: 'purchaser_canvass',
-    },
-    snapshot,
-  )
-
-  // Notification: Notify BAC Secretary + Inform Requestor
-  try {
-    const reqWithEmail = await ensureRequestorEmail(current)
-    const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
-    console.log('[markRequisitionCanvassed] Found BAC emails:', bacEmails)
-    if (bacEmails.length > 0) {
-      console.log('[markRequisitionCanvassed] Notifying BAC...')
-      await notificationService.notifyBACNewCanvass(reqWithEmail, bacEmails)
-    } else {
-      console.warn('[markRequisitionCanvassed] SKIPPING BAC NOTIFICATION: No active BAC_SECRETARY found.')
-    }
-    // Tell the requestor that their requisition is now in the canvassing/BAC phase
-    await notificationService.notifyRequestorUpdate(
-      reqWithEmail,
-      'Step Approved',
-      '',
-      'BAC (Canvass)',
-    )
-  } catch (e) {
-    console.error('[markRequisitionCanvassed] BAC notification error:', e)
-  }
-
-  return getRequisition(requisitionId)
-}
-
-/**
- * Submit canvassed requisition to BAC Secretary (Purchaser).
- * Sets canvassStatus to SUBMITTED_TO_BAC.
- */
-export async function submitRequisitionToBAC(requisitionId, { submittedBy }) {
-  const current = await getRequisition(requisitionId)
-  if (!current || current.status !== REQUISITION_STATUS.APPROVED) {
-    throw new Error('Requisition is not approved.')
-  }
-  if (current.canvassStatus !== CANVASS_STATUS.ORDER_CREATED) {
-    throw new Error('Canvass must be completed before submitting to BAC.')
-  }
-
-  await updateRequisition(requisitionId, {
-    canvassStatus: CANVASS_STATUS.SUBMITTED_TO_BAC,
-    submittedToBACAt: new Date().toISOString(),
-    submittedToBACBy: submittedBy ?? null,
-  })
-
-  // Log the submission
-  const snapshot = {
-    statusBefore: current.status,
-    statusAfter: current.status,
-    rfControlNo: current.rfControlNo ?? '',
-    purpose: (current.purpose ?? '').slice(0, 200),
-    canvassStatus: CANVASS_STATUS.SUBMITTED_TO_BAC,
-  }
-  await appendTransactionLog(
-    requisitionId,
-    {
-      action: 'submitted_to_bac',
-      userId: submittedBy?.userId ?? '',
-      name: submittedBy?.name ?? 'Purchaser / Canvasser',
-      title: 'Purchaser',
-      email: submittedBy?.email ?? '',
-      step: 'purchaser_bac_submit',
-    },
-    snapshot,
-  )
-
-  // Notification: Notify BAC Secretary
-  try {
-    const bacEmails = await getEmailsByRole(USER_ROLES.BAC_SECRETARY)
-    if (bacEmails.length > 0) {
-      await notificationService.notifyBACNewCanvass(current, bacEmails)
-    }
-  } catch (e) {
-    console.error('BAC submission notification error:', e)
-  }
-
-  return getRequisition(requisitionId)
-}
-
-/**
- * Mark an approved requisition as received (Purchaser). Sets purchaseStatus to received, receivedAt, receivedBy.
- */
-export async function markRequisitionReceived(
-  requisitionId,
-  { receivedAt, receivedBy, signatureData },
-) {
-  const current = await getRequisition(requisitionId)
-  if (!current || current.status !== REQUISITION_STATUS.APPROVED) {
-    throw new Error('Requisition is not approved.')
-  }
-  const at = receivedAt
-    ? receivedAt instanceof Date
-      ? receivedAt.toISOString()
-      : receivedAt
-    : new Date().toISOString()
-  await updateRequisition(requisitionId, {
-    purchaseStatus: PURCHASE_STATUS.RECEIVED,
-    receivedAt: at,
-    receivedBy: receivedBy ?? null,
-    isArchived: true,
-    archivedAt: serverTimestamp(),
-  })
-
-  // Save e-signature if provided
-  if (receivedBy && signatureData) {
-    await upsertRequisitionSignature(requisitionId, 'receivedBy', {
-      userId: receivedBy.userId,
-      name: receivedBy.name,
-      title: 'Purchaser',
-      signedAt: at,
-      signatureData,
-    })
-  }
-  // Log the purchaser received action
-  const after = await getRequisition(requisitionId)
-  const snap = {
-    statusBefore: after.status,
-    statusAfter: after.status,
-    rfControlNo: after.rfControlNo ?? '',
-    purpose: (after.purpose ?? '').slice(0, 200),
-    purchaseStatus: PURCHASE_STATUS.RECEIVED,
-    poNumber: after.poNumber ?? '',
-  }
-  await appendTransactionLog(
-    requisitionId,
-    {
-      action: 'received',
-      userId: receivedBy?.userId ?? '',
-      name: receivedBy?.name ?? 'Purchaser',
-      title: 'Purchaser',
-      email: receivedBy?.email ?? '',
-      step: 'purchaser',
-    },
-    snap,
-  )
-
-  return getRequisition(requisitionId)
-}
+// Legacy PO tracking and mutator functions removed
 
 /**
  * Build query for requisitions (with optional filters and pagination).
@@ -1560,12 +787,6 @@ function buildRequisitionsQuery(filters = {}, opts = {}) {
     } else {
       constraints.push(where('status', '==', filters.status))
     }
-  }
-  if (filters.purchaseStatus) {
-    constraints.push(where('purchaseStatus', '==', filters.purchaseStatus))
-  }
-  if (filters.canvassStatus && !Array.isArray(filters.canvassStatus)) {
-    constraints.push(where('canvassStatus', '==', filters.canvassStatus))
   }
   if (filters.department) {
     constraints.push(where('department', '==', filters.department))
@@ -1608,12 +829,6 @@ export async function getRequisitionCount(filters = {}) {
       constraints.push(where('status', '==', filters.status))
     }
   }
-  if (filters.purchaseStatus) {
-    constraints.push(where('purchaseStatus', '==', filters.purchaseStatus))
-  }
-  if (filters.canvassStatus && !Array.isArray(filters.canvassStatus)) {
-    constraints.push(where('canvassStatus', '==', filters.canvassStatus))
-  }
   if (filters.department) {
     constraints.push(where('department', '==', filters.department))
   }
@@ -1624,7 +839,7 @@ export async function getRequisitionCount(filters = {}) {
   // Support for signature field filtering (e.g. "divisionApproved.userId")
   // and other nested fields
   Object.keys(filters).forEach(key => {
-    if (['requestedBy', 'status', 'purchaseStatus', 'canvassStatus', 'department', 'assignedApproverId'].includes(key)) return
+    if (['requestedBy', 'status', 'department', 'assignedApproverId'].includes(key)) return
     constraints.push(where(key, '==', filters[key]))
   })
   const q = query(base, ...constraints)
@@ -1646,27 +861,6 @@ export async function listRequisitions(filters = {}, pagination = {}) {
   let results = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
 
   if (filters.department) results = results.filter((r) => r.department === filters.department)
-  if (filters.canvassStatus) {
-    const target = filters.canvassStatus
-    if (Array.isArray(target)) {
-      results = results.filter((r) => target.includes(r.canvassStatus || CANVASS_STATUS.PENDING))
-    } else {
-      results = results.filter((r) => (r.canvassStatus || CANVASS_STATUS.PENDING) === target)
-    }
-  }
-  if (filters.purchaseStatus) {
-    results = results.filter(
-      (r) => (r.purchaseStatus || PURCHASE_STATUS.PENDING) === filters.purchaseStatus,
-    )
-  }
-  if (filters.poStatus !== undefined) {
-    const target = filters.poStatus
-    if (Array.isArray(target)) {
-      results = results.filter((r) => target.includes(r.poStatus ?? null))
-    } else {
-      results = results.filter((r) => r.poStatus === target)
-    }
-  }
 
   const lastDoc = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null
   const hasMore = snapshot.docs.length === pageSize
@@ -1685,7 +879,7 @@ export async function listRequisitionsSimple(filters = {}) {
 
 /**
  * Get analytics counts for GM sidebar. Runs 3 queries in parallel.
- * @returns {Promise<{ pendingApproval: number, approvedThisMonth: number, rejectedThisMonth: number, approvedNotYetPurchased: number }>}
+ * @returns {Promise<{ pendingApproval: number, approvedThisMonth: number, rejectedThisMonth: number }>}
  */
 export async function getGMStats() {
   const now = new Date()
@@ -1715,16 +909,10 @@ export async function getGMStats() {
     return d && d >= startOfMonth && d <= endOfMonth
   }).length
 
-  const approvedNotYetPurchased = approvedList.filter((r) => {
-    const ps = r.purchaseStatus || PURCHASE_STATUS.PENDING
-    return ps === PURCHASE_STATUS.PENDING
-  }).length
-
   return {
     pendingApproval: pendingList.length,
     approvedThisMonth,
     rejectedThisMonth,
-    approvedNotYetPurchased,
   }
 }
 
@@ -1804,11 +992,6 @@ export async function getAnalyticsData() {
     const d = toDate(r.archivedAt ?? r.date)
     return d && d >= startOfMonth && d <= endOfMonth
   }).length
-  const approvedNotYetPurchased = approvedList.filter((r) => {
-    const ps = r.purchaseStatus || PURCHASE_STATUS.PENDING
-    return ps === PURCHASE_STATUS.PENDING
-  }).length
-
   const pipeline = {}
   STATUS_ORDER.forEach((s) => {
     pipeline[s] = 0
@@ -1855,33 +1038,10 @@ export async function getAnalyticsData() {
   const monthlyTrend = Object.entries(monthlyMap)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([, v]) => ({ monthLabel: v.label, total: v.total }))
-
-  const purchasePending = approvedList.filter(
-    (r) => (r.purchaseStatus || PURCHASE_STATUS.PENDING) === PURCHASE_STATUS.PENDING,
-  ).length
-  const purchaseOrdered = approvedList.filter(
-    (r) => r.purchaseStatus === PURCHASE_STATUS.ORDERED,
-  ).length
-  const purchaseReceived = approvedList.filter(
-    (r) => r.purchaseStatus === PURCHASE_STATUS.RECEIVED,
-  ).length
-
   return {
-    summary: {
-      pendingApproval: pendingList.length,
-      approvedThisMonth,
-      rejectedThisMonth,
-      approvedNotYetPurchased,
-    },
-    pipeline,
     byDepartment,
     monthlyTrend,
     approvedVsRejected: { approved: approvedThisMonth, rejected: rejectedThisMonth },
-    purchaseBreakdown: {
-      pending: purchasePending,
-      ordered: purchaseOrdered,
-      received: purchaseReceived,
-    },
   }
 }
 
@@ -1937,12 +1097,6 @@ export async function computeAnalyticsFromLists(
   const approvedPct = decisionsTotal > 0 ? Math.round((approvedCount / decisionsTotal) * 100) : 0
   const rejectedPct = decisionsTotal > 0 ? Math.round((rejectedCount / decisionsTotal) * 100) : 0
 
-  const approvedNotYetPurchased = approvedInRangeFull.filter(
-    (r) => (r.purchaseStatus || PURCHASE_STATUS.PENDING) === PURCHASE_STATUS.PENDING,
-  ).length
-  const notYetPurchasedPct =
-    approvedCount > 0 ? Math.round((approvedNotYetPurchased / approvedCount) * 100) : 0
-
   const pipeline = {}
   STATUS_ORDER.forEach((s) => {
     pipeline[s] = 0
@@ -1995,7 +1149,7 @@ export async function computeAnalyticsFromLists(
       monthlyMap[key].total++
       if (
         r.status === REQUISITION_STATUS.APPROVED ||
-        r.purchaseStatus === PURCHASE_STATUS.RECEIVED
+        r.status === REQUISITION_STATUS.RECEIVED
       ) {
         const reqTotal = (r.items || []).reduce((sum, item) => {
           const qty = parseFloat(item.quantity) || 0
@@ -2009,23 +1163,6 @@ export async function computeAnalyticsFromLists(
   const monthlyTrend = Object.entries(monthlyMap)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([, v]) => ({ monthLabel: v.label, total: v.total, value: v.value }))
-
-  const purchasePending = approvedInRangeFull.filter(
-    (r) => (r.purchaseStatus || PURCHASE_STATUS.PENDING) === PURCHASE_STATUS.PENDING,
-  ).length
-  const purchaseOrdered = approvedInRangeFull.filter(
-    (r) => r.purchaseStatus === PURCHASE_STATUS.ORDERED,
-  ).length
-  const purchaseReceived = approvedInRangeFull.filter(
-    (r) => r.purchaseStatus === PURCHASE_STATUS.RECEIVED,
-  ).length
-  const purchaseTotal = purchasePending + purchaseOrdered + purchaseReceived
-  const purchasePendingPct =
-    purchaseTotal > 0 ? Math.round((purchasePending / purchaseTotal) * 100) : 0
-  const purchaseOrderedPct =
-    purchaseTotal > 0 ? Math.round((purchaseOrdered / purchaseTotal) * 100) : 0
-  const purchaseReceivedPct =
-    purchaseTotal > 0 ? Math.round((purchaseReceived / purchaseTotal) * 100) : 0
 
   // Calculate Productivity & Financial Metrics
   let totalLeadTimeMs = 0
@@ -2047,11 +1184,6 @@ export async function computeAnalyticsFromLists(
     inventory_to_budget: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
     budget_to_audit: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
     audit_to_gm: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
-    gm_to_fulfillment: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
-    req_appr_to_po_issue: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
-    po_issue_to_po_budget: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
-    po_budget_to_po_audit: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
-    po_audit_to_po_gm: { total: 0, count: 0, activeTotal: 0, activeCount: 0 },
   }
 
   approvedInRangeFull.forEach((r) => {
@@ -2097,13 +1229,7 @@ export async function computeAnalyticsFromLists(
     const t3 = toDate(r.budgetApproved?.signedAt)
     const t4 = toDate(r.checkedBy?.signedAt)
     const t5 = toDate(r.approvedBy?.signedAt)
-    const t6 = toDate(r.receivedAt || r.archivedAt)
-
-    // PO Phase timestamps
-    const tp0 = r.orderedAt ? toDate(r.orderedAt) : null
-    const tp1 = r.poBudgetApproved?.signedAt ? toDate(r.poBudgetApproved.signedAt) : null
-    const tp2 = r.poAuditApproved?.signedAt ? toDate(r.poAuditApproved.signedAt) : null
-    const tp3 = r.poGMApproved?.signedAt ? toDate(r.poGMApproved.signedAt) : null
+    const t6 = toDate(r.archivedAt)
 
     if (t0 && t1) {
       stageVelocity.submission_to_recommend.total += Math.max(0, t1 - t0)
@@ -2124,29 +1250,6 @@ export async function computeAnalyticsFromLists(
     if (t4 && t5) {
       stageVelocity.audit_to_gm.total += Math.max(0, t5 - t4)
       stageVelocity.audit_to_gm.count++
-    }
-    if (t5 && t6 && r.purchaseStatus === PURCHASE_STATUS.RECEIVED) {
-      stageVelocity.gm_to_fulfillment.total += Math.max(0, t6 - t5)
-      stageVelocity.gm_to_fulfillment.count++
-    }
-
-    // New PO Phase Velocity
-    if (t5 && tp0) {
-      // Req Approved -> PO First Issued
-      stageVelocity.req_appr_to_po_issue.total += Math.max(0, tp0 - t5)
-      stageVelocity.req_appr_to_po_issue.count++
-    }
-    if (tp0 && tp1) {
-      stageVelocity.po_issue_to_po_budget.total += Math.max(0, tp1 - tp0)
-      stageVelocity.po_issue_to_po_budget.count++
-    }
-    if (tp1 && tp2) {
-      stageVelocity.po_budget_to_po_audit.total += Math.max(0, tp2 - tp1)
-      stageVelocity.po_budget_to_po_audit.count++
-    }
-    if (tp2 && tp3) {
-      stageVelocity.po_audit_to_po_gm.total += Math.max(0, tp3 - tp2)
-      stageVelocity.po_audit_to_po_gm.count++
     }
   })
 
@@ -2201,42 +1304,6 @@ export async function computeAnalyticsFromLists(
         stageVelocity.audit_to_gm.activeTotal += Math.max(0, now - entry)
         stageVelocity.audit_to_gm.activeCount++
       }
-    } else if (
-      r.status === REQUISITION_STATUS.APPROVED &&
-      (r.purchaseStatus || PURCHASE_STATUS.PENDING) === PURCHASE_STATUS.PENDING
-    ) {
-      const entry = toDate(r.approvedBy?.signedAt)
-      if (entry) {
-        stageVelocity.gm_to_fulfillment.activeTotal += Math.max(0, now - entry)
-        stageVelocity.gm_to_fulfillment.activeCount++
-      }
-    }
-
-    // PO Stages
-    if (r.status === REQUISITION_STATUS.APPROVED && !r.poStatus) {
-      const entry = toDate(r.approvedBy?.signedAt)
-      if (entry) {
-        stageVelocity.req_appr_to_po_issue.activeTotal += Math.max(0, now - entry)
-        stageVelocity.req_appr_to_po_issue.activeCount++
-      }
-    } else if (r.poStatus === PO_STATUS.PENDING_BUDGET) {
-      const entry = r.orderedAt ? toDate(r.orderedAt) : null
-      if (entry) {
-        stageVelocity.po_issue_to_po_budget.activeTotal += Math.max(0, now - entry)
-        stageVelocity.po_issue_to_po_budget.activeCount++
-      }
-    } else if (r.poStatus === PO_STATUS.PENDING_AUDIT) {
-      const entry = toDate(r.poBudgetApproved?.signedAt)
-      if (entry) {
-        stageVelocity.po_budget_to_po_audit.activeTotal += Math.max(0, now - entry)
-        stageVelocity.po_budget_to_po_audit.activeCount++
-      }
-    } else if (r.poStatus === PO_STATUS.PENDING_GM) {
-      const entry = toDate(r.poAuditApproved?.signedAt)
-      if (entry) {
-        stageVelocity.po_audit_to_po_gm.activeTotal += Math.max(0, now - entry)
-        stageVelocity.po_audit_to_po_gm.activeCount++
-      }
     }
   })
   // --- END ACTIVE AGING LOGIC ---
@@ -2262,33 +1329,13 @@ export async function computeAnalyticsFromLists(
     }))
     .sort((a, b) => b.total - a.total)
 
-  const poPipeline = {
-    [PO_STATUS.PENDING_BUDGET]: 0,
-    [PO_STATUS.PENDING_AUDIT]: 0,
-    [PO_STATUS.PENDING_GM]: 0,
-    [PO_STATUS.APPROVED]: 0,
-  }
-  activeInRange.forEach((r) => {
-    if (r.poStatus && poPipeline[r.poStatus] !== undefined) {
-      poPipeline[r.poStatus]++
-    }
-  })
-  const poPipelineTotal = activeInRange.filter((r) => !!r.poStatus).length
-  const poPipelineWithPct = Object.entries(poPipeline).map(([status, count]) => ({
-    status,
-    count,
-    pct: poPipelineTotal > 0 ? Math.round((count / poPipelineTotal) * 100) : 0,
-  }))
-
   return {
     summary: {
       pendingApproval: pendingInRange.length,
       approvedThisMonth: approvedCount,
       rejectedThisMonth: rejectedCount,
-      approvedNotYetPurchased,
       approvedPct,
       rejectedPct,
-      notYetPurchasedPct,
       avgLeadTimeDays,
       totalApprovedValue,
       avgOrderValue,
@@ -2296,9 +1343,6 @@ export async function computeAnalyticsFromLists(
     pipeline,
     pipelineWithPct,
     pipelineTotal,
-    poPipeline,
-    poPipelineWithPct,
-    poPipelineTotal,
     byDepartment,
     monthlyTrend,
     approvedVsRejected: {
@@ -2306,14 +1350,6 @@ export async function computeAnalyticsFromLists(
       rejected: rejectedCount,
       approvedPct,
       rejectedPct,
-    },
-    purchaseBreakdown: {
-      pending: purchasePending,
-      ordered: purchaseOrdered,
-      received: purchaseReceived,
-      pendingPct: purchasePendingPct,
-      orderedPct: purchaseOrderedPct,
-      receivedPct: purchaseReceivedPct,
     },
     productivity: {
       avgLeadTimeDays,
@@ -2636,8 +1672,6 @@ export async function approveRequisition(id, approver, role) {
   }
   if (workflow.nextStatus === REQUISITION_STATUS.APPROVED) {
     updateData.archivedAt = serverTimestamp()
-    updateData.canvassStatus = CANVASS_STATUS.PENDING
-    updateData.purchaseStatus = PURCHASE_STATUS.PENDING
   }
 
   // For the internal auditor: append log entry in the SAME write as the status change.
@@ -2713,13 +1747,8 @@ export async function approveRequisition(id, approver, role) {
       // Step-by-Step Notification: Inform requestor it moved to the next role
       await notificationService.notifyRequestorUpdate(reqWithEmail, 'Step Approved', '', nextRole)
     } else if (workflow.nextStatus === REQUISITION_STATUS.APPROVED) {
-      // Final Approval: Inform requestor and explicitly mention Purchaser phase
-      await notificationService.notifyRequestorUpdate(reqWithEmail, 'approved', '', 'Purchaser')
-      // Notify Purchaser
-      const purchaserEmails = await getEmailsByRole(USER_ROLES.PURCHASER)
-      if (purchaserEmails.length > 0) {
-        await notificationService.notifyNextApprover(reqWithEmail, 'Purchaser', purchaserEmails)
-      }
+      // Final Approval: Inform requestor
+      await notificationService.notifyRequestorUpdate(reqWithEmail, 'approved', '', 'Approved')
     }
   } catch (e) {
     console.error('Approval notification error:', e)
@@ -2840,15 +1869,7 @@ export function getRequisitionCurrentStep(requisition) {
   let label = STATUS_TO_CURRENT_STEP[status] || status
 
   if (status === REQUISITION_STATUS.APPROVED) {
-    if (requisition.isArchived) {
-      label = 'Finished / Archived'
-    } else if (requisition.purchaseStatus === PURCHASE_STATUS.ORDERED) {
-      label = 'In Receiving'
-    } else if (requisition.canvassStatus === CANVASS_STATUS.SUBMITTED_TO_BAC) {
-      label = 'PO Approval'
-    } else {
-      label = 'Procurement Hub'
-    }
+    label = 'Finished / Archived'
   }
 
   const department = requisition.department || '—'
@@ -2926,76 +1947,6 @@ export function getRequisitionStatusLog(requisition) {
 }
 
 /**
- * Build a status log (timeline) for a Purchase Order approval
- */
-export function getPOStatusLog(requisition) {
-  if (!requisition || !requisition.poStatus) return { currentStep: null, entries: [] }
-  const r = requisition
-  const entries = []
-
-  // 1. Initial Step: PO Issued
-  const orderedBy = r.orderedBy
-  entries.push({
-    step: 'PO Issued',
-    role: orderedBy?.role === USER_ROLES.BAC_SECRETARY ? 'BAC Secretary' : 'Purchaser',
-    by: orderedBy?.name ?? null,
-    at: r.orderedAt ?? null,
-    done: !!r.orderedAt,
-    current: false,
-  })
-
-  const steps = [
-    {
-      key: 'poBudgetApproved',
-      status: PO_STATUS.PENDING_BUDGET,
-      role: 'Acctg. Div. Supervisor / Budget Officer',
-    },
-    {
-      key: 'poAuditApproved',
-      status: PO_STATUS.PENDING_AUDIT,
-      role: 'Internal Auditor',
-    },
-    {
-      key: 'poGMApproved',
-      status: PO_STATUS.PENDING_GM,
-      role: 'General Manager',
-    },
-  ]
-
-  for (const { key, status, role } of steps) {
-    const data = r[key]
-    const isCurrent = r.poStatus === status
-
-    // Logic: A step is "done" if we have its data (signature/timestamp)
-    // OR if the PO is already approved (meaning we passed this step).
-    const isDone = !!data || r.poStatus === PO_STATUS.APPROVED
-
-    entries.push({
-      step: role,
-      role,
-      by: data?.name ?? null,
-      at: data?.signedAt ?? null,
-      done: isDone,
-      current: isCurrent,
-    })
-  }
-
-  // Final 'Issued' step indicator (only if approved)
-  if (r.poStatus === PO_STATUS.APPROVED) {
-    entries.push({
-      step: 'PO Fully Approved',
-      role: 'System',
-      by: 'Automatic',
-      at: r.poGMApproved?.signedAt,
-      done: true,
-      current: true,
-    })
-  }
-
-  return { entries }
-}
-
-/**
  * Subscribe to requisitions in realtime (first page only). Use loadMoreRequisitions for next pages.
  * @param {object} filters - optional { status, department, requestedBy }
  * @param {function} callback - (results, lastDoc) => void — lastDoc is for "Load more"
@@ -3012,7 +1963,7 @@ export function subscribeRequisitions(filters, callback, onError, opts = {}) {
     true,
     (snapshot) => {
       let results = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-      // server-side handled status, purchaseStatus, and singular canvassStatus mostly
+      // server-side handled status and other fields
       // but keeping safety checks for client-side fallback/arrays
       if (filters?.status) {
         if (Array.isArray(filters.status)) {
@@ -3021,30 +1972,7 @@ export function subscribeRequisitions(filters, callback, onError, opts = {}) {
           results = results.filter((r) => r.status === filters.status)
         }
       }
-      if (filters?.purchaseStatus) {
-        results = results.filter(
-          (r) => (r.purchaseStatus || PURCHASE_STATUS.PENDING) === filters.purchaseStatus,
-        )
-      }
       if (filters?.department) results = results.filter((r) => r.department === filters.department)
-      if (filters?.canvassStatus) {
-        const target = filters.canvassStatus
-        if (Array.isArray(target)) {
-          results = results.filter((r) =>
-            target.includes(r.canvassStatus || CANVASS_STATUS.PENDING),
-          )
-        } else if (results.length > 0) {
-          results = results.filter((r) => (r.canvassStatus || CANVASS_STATUS.PENDING) === target)
-        }
-      }
-      if (filters?.poStatus !== undefined) {
-        const target = filters.poStatus
-        if (Array.isArray(target)) {
-          results = results.filter((r) => target.includes(r.poStatus ?? null))
-        } else {
-          results = results.filter((r) => r.poStatus === target)
-        }
-      }
       const lastDoc = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null
       callback(results, lastDoc)
     },
@@ -3212,31 +2140,9 @@ export function subscribeRequisition(id, callback) {
 }
 
 /**
- * Fetch Purchase Orders pending approval by the specified status (e.g. PENDING_BUDGET, PENDING_AUDIT)
+ * Fetch requisitions pending approval by the specified status (e.g. PENDING_BUDGET, PENDING_AUDIT)
  */
-export async function getPOApprovals(status, limitVal = REQUISITION_PAGE_SIZE) {
-  const q = query(
-    collection(db, COLLECTIONS.REQUISITIONS),
-    where('poStatus', '==', status),
-    orderBy('orderedAt', 'desc'),
-    limit(limitVal),
-  )
-  const snap = await getDocs(q)
-  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
-}
 
-/**
- * Subscribe to Purchase Orders by poStatus.
- */
-export function subscribePOApprovals(status, onData, onError, limitVal = REQUISITION_PAGE_SIZE) {
-  const q = query(
-    collection(db, COLLECTIONS.REQUISITIONS),
-    where('poStatus', '==', status),
-    orderBy('orderedAt', 'desc'),
-    limit(limitVal),
-  )
-  return subscribeWithFallback(q, true, onData, onError)
-}
 
 /**
  * Force-advance a requisition to the next step (Super Admin override)
@@ -3297,8 +2203,6 @@ export async function forceAdvanceStep(id, user, reason) {
 
   if (nextStatus === REQUISITION_STATUS.APPROVED) {
     updateData.archivedAt = serverTimestamp()
-    updateData.canvassStatus = CANVASS_STATUS.PENDING
-    updateData.purchaseStatus = PURCHASE_STATUS.PENDING
   }
 
   // Audit Log Entry
@@ -3419,14 +2323,8 @@ export async function migrateLegacyArchivedRecords() {
   console.log('[Migration] Fetching records to archive...')
   const toArchiveSnaps = await Promise.all([
     getDocs(query(base, where('status', '==', REQUISITION_STATUS.REJECTED))),
-    getDocs(
-      query(
-        base,
-        where('status', '==', REQUISITION_STATUS.APPROVED),
-        where('purchaseStatus', '==', PURCHASE_STATUS.RECEIVED),
-      ),
-    ),
-  ]).catch(err => {
+    getDocs(query(base, where('status', '==', REQUISITION_STATUS.RECEIVED))),
+  ]).catch((err) => {
     console.error('[Migration] Error fetching toArchiveSnaps:', err)
     throw err
   })
@@ -3466,14 +2364,11 @@ export async function migrateLegacyArchivedRecords() {
   // Handle Premature Archive Flags (Fix for the reported bug)
   prematurelyArchivedSnap.docs.forEach((d) => {
     const data = d.data()
-    // If it's APPROVED but NOT RECEIVED, it shouldn't be archived yet
-    if (data.purchaseStatus !== PURCHASE_STATUS.RECEIVED) {
+    // Focus on received status
+    if (data.status !== REQUISITION_STATUS.RECEIVED && data.status !== REQUISITION_STATUS.REJECTED) {
       batch.update(d.ref, {
         isArchived: false,
         archivedAt: null,
-        // Ensure statuses are initialized so it shows in Purchaser Hub
-        canvassStatus: data.canvassStatus || CANVASS_STATUS.PENDING,
-        purchaseStatus: data.purchaseStatus || PURCHASE_STATUS.PENDING,
       })
       count++
     }
@@ -3522,7 +2417,7 @@ export async function clearAllTestingData(userProfile) {
 
   // Reset basic counters
   const currentYear = new Date().getFullYear()
-  const countersToReset = ['requisitionRf', `canvassNo_${currentYear}`, `poNo_${currentYear}`]
+  const countersToReset = ['requisitionRf']
 
   for (const cId of countersToReset) {
     await setDoc(doc(db, 'counters', cId), { lastNo: 0 }, { merge: false })

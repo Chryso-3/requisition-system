@@ -111,9 +111,8 @@ export async function notifyRequestorUpdate(requisition, status, remarks = '', n
   console.log('[Notification] Target email:', email)
 
   const isApproved = status === 'approved'
-  const isPOApproved = status === 'po_approved'
   const isRejected = status === 'rejected' || status === 'declined'
-  const isStepUpdate = !isApproved && !isPOApproved && !isRejected
+  const isStepUpdate = !isApproved && !isRejected
 
   let subject = `[Update] Requisition ${requisition.rfControlNo} - Status Update`
   let headerGradient = 'linear-gradient(135deg, #1e293b 0%, #334155 100%)' // Default Slate
@@ -126,12 +125,6 @@ export async function notifyRequestorUpdate(requisition, status, remarks = '', n
     headerGradient = 'linear-gradient(135deg, #065f46 0%, #059669 100%)' // Success Green
     statusColor = '#059669'
     mainTitle = 'Fully Approved'
-  } else if (isPOApproved) {
-    subject = `[PO Approved] Purchase Order for ${requisition.rfControlNo} is Signed`
-    headerGradient = 'linear-gradient(135deg, #0c4a6e 0%, #0284c7 100%)' // Sky Blue
-    statusColor = '#0284c7'
-    mainTitle = 'Purchase Order Approved'
-    statusText = 'PO APPROVED'
   } else if (isRejected) {
     subject = `[Action Required] Requisition ${requisition.rfControlNo} was REJECTED`
     headerGradient = 'linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%)' // Danger Red
@@ -207,110 +200,6 @@ export async function notifyRequestorUpdate(requisition, status, remarks = '', n
   return sendEmailRelay({ to: email, subject, htmlBody })
 }
 
-/**
- * Notifies the BAC Secretary of a new Canvass submission
- * @param {object} requisition The requisition document
- * @param {string|string[]} emails Target emails
- */
-export async function notifyBACNewCanvass(requisition, emails) {
-  if (!emails) return
-  const emailList = Array.isArray(emails) ? emails : [emails]
-  if (emailList.length === 0) return
-
-  const subject = `[New Canvass] Ready for PO Issuance - ${requisition.rfControlNo}`
-
-  const htmlBody = `
-    <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);">
-      <div style="background: linear-gradient(135deg, #450a0a 0%, #7f1d1d 100%); padding: 40px 32px; text-align: center;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: -0.03em; font-weight: 800;">LEYECO III</h1>
-        <p style="color: rgba(255, 255, 255, 0.9); margin: 8px 0 0; font-size: 16px; font-weight: 500; letter-spacing: 0.02em;">BAC Management Module</p>
-      </div>
-      <div style="padding: 48px 40px;">
-        <h2 style="color: #0f172a; margin: 0 0 16px; font-size: 24px; font-weight: 700; letter-spacing: -0.02em;">Canvass Ready for PO</h2>
-        <p style="color: #334155; line-height: 1.7; margin: 0 0 32px; font-size: 16px;">A new canvass has been finalized and is ready for <strong style="color: #0f172a; font-weight: 700;">Purchase Order issuance</strong>.</p>
-
-        <div style="background: #f8fafc; border-radius: 16px; padding: 32px; border: 1px solid #e2e8f0; margin-bottom: 40px;">
-          <table style="width: 100%; border-collapse: separate; border-spacing: 0 16px;">
-            <tr>
-              <td style="padding: 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.08em; width: 160px; vertical-align: top;">Control Number</td>
-              <td style="padding: 0; color: #0f172a; font-weight: 700; font-size: 16px; vertical-align: top;">
-                 <span style="background: #e2e8f0; padding: 4px 10px; border-radius: 6px; color: #0f172a;">${requisition.rfControlNo}</span>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding: 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.08em; vertical-align: top;">Supplier</td>
-              <td style="padding: 0; color: #1e293b; vertical-align: top; font-size: 16px; font-weight: 500;">${requisition.supplier?.name || 'Multiple Suppliers'}</td>
-            </tr>
-          </table>
-        </div>
-
-        <div style="text-align: center;">
-          <a href="${window.location.origin}/bac-dashboard" style="display: inline-block; background: #b91c1c; color: #ffffff; padding: 16px 40px; border-radius: 10px; text-decoration: none; font-weight: 600; font-size: 16px; transition: background 0.2s; box-shadow: 0 4px 6px -1px rgba(185, 28, 28, 0.2), 0 2px 4px -1px rgba(185, 28, 28, 0.1);">Open BAC Dashboard</a>
-        </div>
-      </div>
-      <div style="background: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0;">
-        <p style="margin: 0; font-size: 13px; color: #64748b; font-weight: 500;">This is a system-generated alert for BAC Personnel.</p>
-      </div>
-    </div>
-  `
-
-  const promises = emailList.map((email) => sendEmailRelay({ to: email, subject, htmlBody }))
-  return Promise.allSettled(promises)
-}
-
-/**
- * Notifies the next PO Approver(s)
- * @param {object} requisition The requisition document
- * @param {string} nextRole The next role name
- * @param {string|string[]} nextApproverEmails A single email string or an array of email strings
- */
-export async function notifyPOAction(requisition, nextRole, nextApproverEmails) {
-  if (!nextApproverEmails) return
-  const emails = Array.isArray(nextApproverEmails) ? nextApproverEmails : [nextApproverEmails]
-  if (emails.length === 0) return
-
-  const subject = `[PO Review] Action Required - ${requisition.rfControlNo}`
-  const htmlBody = `
-    <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);">
-      <div style="background: linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%); padding: 40px 32px; text-align: center;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: -0.03em; font-weight: 800;">LEYECO III</h1>
-        <p style="color: rgba(255, 255, 255, 0.9); margin: 8px 0 0; font-size: 16px; font-weight: 500; letter-spacing: 0.02em;">Purchase Order Workflow</p>
-      </div>
-      <div style="padding: 48px 40px;">
-        <h2 style="color: #0f172a; margin: 0 0 16px; font-size: 24px; font-weight: 700; letter-spacing: -0.02em;">PO Approval Required</h2>
-        <p style="color: #334155; line-height: 1.7; margin: 0 0 32px; font-size: 16px;">A Purchase Order requires signature for the <strong style="color: #0f172a; font-weight: 700;">${nextRole}</strong> phase.</p>
-
-        <div style="background: #f8fafc; border-radius: 16px; padding: 32px; border: 1px solid #e2e8f0; margin-bottom: 40px;">
-          <table style="width: 100%; border-collapse: separate; border-spacing: 0 16px;">
-            <tr>
-              <td style="padding: 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.08em; width: 160px; vertical-align: top;">Control Number</td>
-              <td style="padding: 0; color: #0f172a; font-weight: 700; font-size: 16px; vertical-align: top;">
-                 <span style="background: #e2e8f0; padding: 4px 10px; border-radius: 6px; color: #0f172a;">${requisition.rfControlNo}</span>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding: 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.08em; vertical-align: top;">Total Amount</td>
-              <td style="padding: 0; color: #059669; font-weight: 800; font-size: 20px; vertical-align: top;">₱${requisition.totalAmount?.toLocaleString()}</td>
-            </tr>
-          </table>
-        </div>
-
-        <div style="text-align: center;">
-          <a href="${window.location.origin}/po-approvals" style="display: inline-block; background: #b91c1c; color: #ffffff; padding: 16px 40px; border-radius: 10px; text-decoration: none; font-weight: 600; font-size: 16px; transition: background 0.2s; box-shadow: 0 4px 6px -1px rgba(185, 28, 28, 0.2), 0 2px 4px -1px rgba(185, 28, 28, 0.1);">Approve PO</a>
-        </div>
-      </div>
-      <div style="background: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0;">
-        <p style="margin: 0; font-size: 13px; color: #64748b; font-weight: 500;">This is a high-priority financial notification broadcasted to all ${nextRole} personnel.</p>
-      </div>
-    </div>
-  `
-  const promises = emails.map((email) => sendEmailRelay({ to: email, subject, htmlBody }))
-  await Promise.allSettled(promises)
-}
-
-/**
- * Sends a confirmation receipt to the original Requestor
- */
 export async function notifySubmissionReceipt(requisition) {
   const email = requisition.requestedBy?.email
   if (!email) return

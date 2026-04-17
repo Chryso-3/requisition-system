@@ -9,11 +9,8 @@ export const COLLECTIONS = {
   DEPARTMENTS: 'departments',
   INTERNAL_AUDIT_LOG: 'internal_audit_log',
   TRANSACTION_LOG: 'transaction_log',
-  SUPPLIERS: 'suppliers',
   /** One doc per requisition signature step (prevents 1MB requisition doc issues). */
   REQUISITION_SIGNATURES: 'requisition_signatures',
-  /** One doc per requisition quote (prevents 1MB requisition doc issues). */
-  REQUISITION_QUOTES: 'requisition_quotes',
   /** Pre-computed analytics summary document (analytics/summary). */
   ANALYTICS: 'analytics',
   /** System settings like registration toggle, banners, etc. */
@@ -35,35 +32,6 @@ export const REQUISITION_STATUS = {
 }
 
 /**
- * Purchaser-phase status (on approved requisitions only)
- */
-export const PURCHASE_STATUS = {
-  PENDING: 'pending',
-  ORDERED: 'ordered',
-  RECEIVED: 'received',
-}
-
-/**
- * Canvass status (on approved requisitions only)
- */
-export const CANVASS_STATUS = {
-  PENDING: 'pending',
-  ORDER_CREATED: 'order_created',
-  SUBMITTED_TO_BAC: 'submitted_to_bac',
-}
-
-/**
- * PO Approval Workflow status
- */
-export const PO_STATUS = {
-  PENDING_BUDGET: 'pending_budget',
-  PENDING_AUDIT: 'pending_audit',
-  PENDING_GM: 'pending_gm',
-  APPROVED: 'approved',
-  REJECTED: 'rejected',
-}
-
-/**
  * User roles matching the approval workflow
  */
 export const USER_ROLES = {
@@ -75,8 +43,6 @@ export const USER_ROLES = {
   BUDGET_OFFICER: 'budget_officer', // Budget Approved
   INTERNAL_AUDITOR: 'internal_auditor', // Checked by
   GENERAL_MANAGER: 'general_manager', // Approved By
-  PURCHASER: 'purchaser', // Canvasses and Orders approved requisitions
-  BAC_SECRETARY: 'bac_secretary', // Receives canvass and creates PO
   SUPER_ADMIN: 'super_admin', // Full system control
 }
 
@@ -92,7 +58,5 @@ export const USER_ROLE_LABELS = {
   [USER_ROLES.BUDGET_OFFICER]: 'Acctg. Div. Supervisor / Budget Officer',
   [USER_ROLES.INTERNAL_AUDITOR]: 'Internal Auditor',
   [USER_ROLES.GENERAL_MANAGER]: 'General Manager',
-  [USER_ROLES.PURCHASER]: 'Purchaser',
-  [USER_ROLES.BAC_SECRETARY]: 'BAC Secretary',
   [USER_ROLES.SUPER_ADMIN]: 'Super Administrator',
 }

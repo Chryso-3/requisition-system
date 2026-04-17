@@ -234,9 +234,7 @@ async function onSubmit() {
   <form class="requisition-form" @submit.prevent="openSaveConfirm">
     <div v-if="error" class="error">{{ error }}</div>
 
-    <div v-if="requisition?.purchaseStatus === 'received'" class="received-stamp-overlay">
-      <div class="received-stamp">RECEIVED</div>
-    </div>
+
 
     <div class="field-row">
       <div class="field">
@@ -716,39 +714,7 @@ async function onSubmit() {
 .form-confirm-modal .btn-primary {
   min-width: 6rem;
 }
-/* Received Stamp */
-.received-stamp-overlay {
-  position: absolute;
-  top: 15rem;
-  right: 5rem;
-  pointer-events: none;
-  z-index: 100;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
 
-.received-stamp {
-  font-family: 'Inter', sans-serif;
-  font-weight: 900;
-  font-size: 4rem;
-  color: #ef4444; /* Bright Red */
-  border: 8px double #ef4444;
-  padding: 0.5rem 1.5rem;
-  text-transform: uppercase;
-  transform: rotate(-15deg);
-  opacity: 0.8;
-  letter-spacing: 4px;
-  user-select: none;
-}
-
-@media print {
-  .received-stamp-overlay {
-    position: fixed;
-    top: 50mm;
-    right: 30mm;
-  }
-}
 
 .fetching-indicator {
   font-size: 0.8rem;

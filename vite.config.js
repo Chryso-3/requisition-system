@@ -28,11 +28,6 @@ export default defineConfig({
             './src/views/admin/AdminUsersView.vue',
             './src/views/admin/AdminReferenceDataView.vue',
             './src/views/admin/AdminSystemSettingsView.vue'
-          ],
-          'procurement-views': [
-            './src/views/ProcurementHubView.vue',
-            './src/views/PurchaseListView.vue',
-            './src/views/CanvassListView.vue'
           ]
         }
       }

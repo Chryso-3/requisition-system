@@ -11,34 +11,18 @@ import {
   subscribeRequisitionSignatures,
   canUserApprove,
   APPROVAL_WORKFLOW,
-  markRequisitionOrdered,
-  markRequisitionReceived,
-  generateCanvassNo,
   updateRequisition,
-  upsertRequisitionQuote,
-  subscribeRequisitionQuotes,
-  markRequisitionCanvassed,
-  generatePbacFormNo,
-  getPOStatusLog,
   deleteRequisition,
 } from '@/services/requisitionService'
-import { Download, FileText, ExternalLink, Edit2 } from 'lucide-vue-next'
+import { Edit2 } from 'lucide-vue-next'
 import { getDeptAbbreviation } from '@/utils/deptUtils'
 import { compressImageToBase64 } from '@/utils/imageUtils'
-import {
-  REQUISITION_STATUS,
-  USER_ROLES,
-  PURCHASE_STATUS,
-  CANVASS_STATUS,
-  PO_STATUS,
-} from '@/firebase/collections'
+import { REQUISITION_STATUS, USER_ROLES } from '@/firebase/collections'
 import { useAuthStore } from '@/stores/auth'
 import RequisitionForm from '@/components/RequisitionForm.vue'
-import PBACForm01 from '@/components/PBACForm01.vue'
-import PurchaseOrder from '@/components/PurchaseOrder.vue'
 
-const printMode = ref('fm-pur-05') // 'fm-pur-05', 'pbac-form-01', or 'purchase-order'
-const activeTab = ref('overview') // 'overview' or 'documents'
+const printMode = ref('fm-pur-05') // 'fm-pur-05' only
+const activeTab = ref('overview')
 
 const route = useRoute()
 const router = useRouter()
@@ -60,18 +44,10 @@ const confirmApproveOpen = ref(false)
 const confirmSubmitOpen = ref(false)
 const confirmEditOpen = ref(false)
 const confirmDiscardOpen = ref(false)
-const purchaseOrderedModal = ref(false)
-const purchaseReceivedModal = ref(false)
-const purchasePoNumber = ref('')
-const purchaseOrderedAt = ref('')
-const purchaseReceivedAt = ref('')
-const purchaseActionLoading = ref(false)
-const purchaseActionError = ref('')
+
 let unsubscribe = null
 let unsubscribeSigs = null
-let unsubscribeQuotes = null
 
-const quotes = ref([])
 // Signatures loaded from separate collection (prevents 1MB requisition doc).
 const sigMap = ref({})
 
@@ -84,52 +60,20 @@ function sigSrcFor(roleKey, fallbackObj) {
   )
 }
 
-async function overridePbacNo() {
-  if (!isAdmin.value) return
-  const current = requisition.value.pbacFormNo || ''
-  const newVal = window.prompt('Override PBAC Form Number:', current)
-  if (newVal === null) return
-
-  try {
-    actionLoading.value = true
-    await updateRequisition(requisition.value.id, { pbacFormNo: newVal })
-    requisition.value.pbacFormNo = newVal
-  } catch (err) {
-    console.error('Error overriding PBAC No:', err)
-    alert('Failed to override PBAC Number.')
-  } finally {
-    actionLoading.value = false
-  }
-}
-
 const statusLog = computed(() => getRequisitionStatusLog(requisition.value))
-const poStatusLog = computed(() => getPOStatusLog(requisition.value))
 
 const backLabel = computed(() => {
   if (from.value === 'my-requisitions') return 'Back to My Requisitions'
-  if (from.value === 'purchase-list') return 'Back to Approved for Purchase'
-  if (from.value === 'canvass-orders') return 'Back to Canvass Orders'
-  if (from.value === 'bac-dashboard') return 'Back to BAC Dashboard'
   if (from.value === 'audit-log') return 'Back to Logs'
   if (from.value === 'archive') return 'Back to Archive'
-  if (from.value === 'po-approvals') return 'Back to PO Approvals'
-  if (from.value === 'procurement-hub') return 'Back to Procurement Hub'
   if (from.value === 'admin-requisitions') return 'Back to Admin Requisitions'
   return 'Back to list'
 })
 
 const backPath = computed(() => {
   if (from.value === 'my-requisitions') return '/my-requisitions'
-  if (from.value === 'purchase-list') return '/purchase-list'
-  if (from.value === 'canvass-orders') return '/canvass-orders'
-  if (from.value === 'bac-dashboard') return '/bac-dashboard'
   if (from.value === 'audit-log') return '/audit-log'
   if (from.value === 'archive') return '/archive'
-  if (from.value === 'po-approvals') return '/po-approvals'
-  if (from.value === 'procurement-hub') {
-    const tab = route.query.tab
-    return tab ? `/procurement-hub?tab=${tab}` : '/procurement-hub'
-  }
   if (from.value === 'admin-requisitions') return '/admin/requisitions'
   return '/all-requisitions'
 })
@@ -157,396 +101,26 @@ const showApproveDecline = computed(() => {
   return canApprove
 })
 
-const isProcurementStaff = computed(() => {
-  const role = authStore?.role || authStore.userProfile?.role
-  return role === USER_ROLES.PURCHASER || role === USER_ROLES.BAC_SECRETARY
+const isFinished = computed(() => requisition.value?.status === REQUISITION_STATUS.APPROVED)
+
+const canPrint = computed(() => {
+  // Always allow printing if finished
+  if (isFinished.value) return true
+  // Also allow if explicitly a procurement role (future proofing)
+  if (authStore.role === 'procurement' || authStore.userProfile?.role === 'procurement') return true
+  return false
 })
 
-const isPurchaser = computed(() => {
-  const role = authStore?.role || authStore.userProfile?.role
-  return role === USER_ROLES.PURCHASER
-})
-const isAdmin = computed(() => {
-  const role = authStore?.role || authStore.userProfile?.role
-  return role === USER_ROLES.SUPER_ADMIN
-})
 const hasSignature = computed(() => !!authStore.userProfile?.signatureData)
 
-const isPOApprover = computed(() => {
-  const role = authStore?.role || authStore.userProfile?.role
-  return (
-    role === USER_ROLES.BUDGET_OFFICER ||
-    role === USER_ROLES.INTERNAL_AUDITOR ||
-    role === USER_ROLES.GENERAL_MANAGER
-  )
-})
-
-const showProcurementDashboard = computed(() => {
-  const r = requisition.value
-  if (!r || r.status === REQUISITION_STATUS.DRAFT) return false
-  return true
-})
-
-const canViewCanvass = computed(() => {
-  const r = requisition.value
-  if (!r || r.status === REQUISITION_STATUS.DRAFT) return false
-  const role = authStore?.role || authStore.userProfile?.role
-
-  if (isProcurementStaff.value) return true
-  if (isPOApprover.value) return true
-  if (isAdmin.value) return true
-
-  const uid = authStore.user?.uid
-  if (isRequestor.value) return true
-  return false
-})
-
-const canViewPO = computed(() => {
-  const r = requisition.value
-  if (!r || !r.poNumber) return false
-  const role = authStore?.role || authStore.userProfile?.role
-
-  if (isProcurementStaff.value) return true
-  if (isPOApprover.value) return true
-  if (isAdmin.value) return true
-  // Requestors can only see it when fully approved
-  if (isRequestor.value) return r.poStatus === PO_STATUS.APPROVED
-  return false
-})
-
-const canViewQuotes = computed(() => {
-  const role = authStore?.role || authStore.userProfile?.role
-  // Support both key 'bac_secretary' and label 'BAC Secretary' for robustness
-  const isBAC = role === USER_ROLES.BAC_SECRETARY || role === 'BAC Secretary'
-  const isAdmin = role === USER_ROLES.SUPER_ADMIN || role === 'Super Administrator'
-  const canView = isBAC || isAdmin
-  
-  console.log('[DEBUG] canViewQuotes:', canView, 'User Role:', role)
-  return canView
-})
-
-const purchaseStatusDisplay = computed(
-  () => requisition.value?.purchaseStatus || PURCHASE_STATUS.PENDING,
-)
-
-const canvassStatusDisplay = computed(
-  () => requisition.value?.canvassStatus || CANVASS_STATUS.PENDING,
-)
-
-const purchaseStatusLabel = {
-  [PURCHASE_STATUS.PENDING]: 'Pending',
-  [PURCHASE_STATUS.ORDERED]: 'Ordered',
-  [PURCHASE_STATUS.RECEIVED]: 'Received',
-}
-
-const canvassStatusLabel = {
-  [CANVASS_STATUS.PENDING]: 'Pending',
-  [CANVASS_STATUS.ORDER_CREATED]: 'Order Created',
-  [CANVASS_STATUS.SUBMITTED_TO_BAC]: 'Submitted to BAC',
-}
-
-const unifiedProcurementStage = computed(() => {
-  const r = requisition.value
-  if (!r || r.status !== REQUISITION_STATUS.APPROVED)
-    return { label: 'Awaiting Hub', class: 'pending' }
-
-  if (r.purchaseStatus === PURCHASE_STATUS.RECEIVED) {
-    return { label: 'Complete: Received', class: 'received' }
-  }
-  if (r.purchaseStatus === PURCHASE_STATUS.ORDERED) {
-    return { label: 'Step 3: Items Ordered (For Receiving)', class: 'ordered' }
-  }
-  if (r.canvassStatus === CANVASS_STATUS.SUBMITTED_TO_BAC) {
-    if (r.poStatus === PO_STATUS.REJECTED) {
-      return { label: 'Returned for Correction (BAC)', class: 'rejected' }
-    }
-    return { label: 'Step 2: PO Issued (Pending Approval)', class: 'bac-processing' }
-  }
-  return { label: 'Step 1: Needs Canvassing', class: 'pending' }
-})
-
-/**
- * Smart Break Logic:
- * If the form is "long" (many items or long purpose), the 2nd copy
- * should always start on a new page to avoid awkward splitting.
- */
 const isLongForm = computed(() => {
-  const r = requisition.value
-  if (!r) return false
-  const itemsCount = (r.items || []).length
-  const purposeLength = (r.purpose || '').length
-  // Threshold: > 5 items or significant purpose text
-  return itemsCount > 5 || purposeLength > 150
+  const items = requisition.value?.items || []
+  // If we have more than 10 items, it's likely too long for 2-copy on 1 page
+  return items.length > 10
 })
 
-const computedPoTotalAmount = computed(() => {
-  const r = requisition.value
-  if (!r || !r.items) return 0
-  const subTotal = r.items.reduce((sum, item) => sum + item.quantity * (item.unitPrice || 0), 0)
-  return subTotal * 1.12 // Add 12% VAT to match PurchaseOrder.vue
-})
 
-const canvassModalOpen = ref(false)
-const canvassNumber = ref('')
-const canvassDate = ref('')
-const supplier = ref('')
-const canvassItems = ref([])
-const canvassActionLoading = ref(false)
-const canvassActionError = ref('')
-const selectedQuotes = ref([
-  { file: null, base64: null, name: '' },
-  { file: null, base64: null, name: '' },
-  { file: null, base64: null, name: '' },
-])
 
-const milestones = computed(() => {
-  const r = requisition.value
-  if (!r) return []
-
-  const isApproved = r.status === REQUISITION_STATUS.APPROVED
-  const isCanvassed =
-    r.canvassStatus === CANVASS_STATUS.ORDER_CREATED ||
-    r.canvassStatus === CANVASS_STATUS.SUBMITTED_TO_BAC
-  const isOrdered =
-    r.purchaseStatus === PURCHASE_STATUS.ORDERED || r.purchaseStatus === PURCHASE_STATUS.RECEIVED
-  const isReceived = r.purchaseStatus === PURCHASE_STATUS.RECEIVED
-
-  // Cumulative logic: if a later step is done, earlier steps are also marked done
-  const stepApprovedDone = isApproved || isCanvassed || isOrdered || isReceived
-  const stepCanvassedDone = isCanvassed || isOrdered || isReceived
-  const stepPoIssuedDone = isOrdered || isReceived
-  const stepOrderedDone = stepPoIssuedDone // Alias for clarity in current checks
-  const stepReceivedDone = isReceived
-
-  return [
-    {
-      id: 'approved',
-      label: 'Approved',
-      done: stepApprovedDone,
-      current: stepApprovedDone && !stepCanvassedDone,
-    },
-    {
-      id: 'canvassed',
-      label: 'Canvassed',
-      done: stepCanvassedDone,
-      current: stepCanvassedDone && !stepOrderedDone,
-    },
-    {
-      id: 'po_issued',
-      label: 'PO Issued',
-      done: isOrdered || isReceived,
-      current:
-        (isCanvassed && !isOrdered) ||
-        (r.canvassStatus === CANVASS_STATUS.SUBMITTED_TO_BAC && !isOrdered),
-    },
-    {
-      id: 'received',
-      label: 'Received',
-      done: stepReceivedDone,
-      current: false, // Final state handled by done
-    },
-  ]
-})
-
-const nextActionPrompt = computed(() => {
-  const r = requisition.value
-  if (!r || r.status !== REQUISITION_STATUS.APPROVED) return null
-
-  if (r.canvassStatus === CANVASS_STATUS.PENDING) {
-    return 'The next step is "Needs Canvassing" in the Procurement Hub. Please log the supplier details below.'
-  }
-  if (r.purchaseStatus === PURCHASE_STATUS.PENDING) {
-    return 'Canvass recorded. Requisition is now in "PO Tracking" at the Procurement Hub while BAC/GM approves the order.'
-  }
-  if (r.purchaseStatus === PURCHASE_STATUS.ORDERED) {
-    return 'The PO has been approved and issued to the supplier! Mark items as received once they arrive.'
-  }
-  if (r.purchaseStatus === PURCHASE_STATUS.RECEIVED) {
-    return 'Complete: All items have been officially received.'
-  }
-  return null
-})
-
-function openCanvassModal() {
-  const r = requisition.value
-  canvassNumber.value = r?.canvassNumber || ''
-  // Auto-generate canvass number if missing
-  if (!canvassNumber.value) {
-    generateCanvassNo()
-      .then((no) => (canvassNumber.value = no))
-      .catch(() => (canvassNumber.value = ''))
-  }
-  canvassDate.value = r?.canvassDate
-    ? (r.canvassDate?.toDate ? r.canvassDate.toDate() : new Date(r.canvassDate))
-        .toISOString()
-        .slice(0, 10)
-    : new Date().toISOString().slice(0, 10)
-  supplier.value = r?.supplier || ''
-  canvassItems.value = (r?.items || []).map((item) => ({ ...item }))
-  canvassActionError.value = ''
-  canvassModalOpen.value = true
-}
-
-function closeCanvassModal() {
-  canvassModalOpen.value = false
-  canvassActionError.value = ''
-  selectedQuotes.value = [
-    { file: null, base64: null, name: '' },
-    { file: null, base64: null, name: '' },
-    { file: null, base64: null, name: '' },
-  ]
-}
-
-async function handleQuoteFile(e, index) {
-  const file = e.target.files[0]
-  if (!file) return
-
-  if (!file.type.startsWith('image/')) {
-    canvassActionError.value = 'Please upload image files only (JPG, PNG).'
-    return
-  }
-
-  canvassActionLoading.value = true
-  try {
-    // Compress immediately to ensure we stay under Firestore limits and save memory
-    const compressedBase64 = await compressImageToBase64(file, 1024, 0.6)
-    selectedQuotes.value[index].file = file
-    selectedQuotes.value[index].base64 = compressedBase64
-    selectedQuotes.value[index].name = file.name
-  } catch (err) {
-    console.error('Image compression error:', err)
-    canvassActionError.value = 'Failed to process image.'
-  } finally {
-    canvassActionLoading.value = false
-  }
-}
-
-function clearQuote(index) {
-  selectedQuotes.value[index] = { file: null, base64: null, name: '' }
-}
-
-async function saveCanvassOrder() {
-  if (!requisition.value?.id) return
-  if (!hasSignature.value) {
-    canvassActionError.value = 'Missing digital signature. Please set it up in your Profile.'
-    return
-  }
-
-  // Validate 3 quotes
-  const quotesCount = selectedQuotes.value.filter((q) => q.file || q.base64).length
-  if (quotesCount < 3) {
-    canvassActionError.value = 'Please upload all 3 supplier quotes/images before submitting.'
-    return
-  }
-
-  canvassActionLoading.value = true
-  canvassActionError.value = ''
-  try {
-    const user = authStore.user
-    const requisitionId = requisition.value.id
-
-    // 1. Save compressed quotes first
-    for (let i = 0; i < selectedQuotes.value.length; i++) {
-      const q = selectedQuotes.value[i]
-      await upsertRequisitionQuote(requisitionId, `quote_${i + 1}`, q.base64)
-    }
-
-    // 2. Mark canvassed
-    await markRequisitionCanvassed(requisitionId, {
-      canvassNumber: canvassNumber.value.trim() || undefined,
-      canvassDate: canvassDate.value ? new Date(canvassDate.value + 'T12:00:00') : new Date(),
-      canvassBy: user
-        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
-        : null,
-      supplier: supplier.value.trim() || undefined, // Make optional
-      items: canvassItems.value,
-      signatureData: authStore.userProfile?.signatureData,
-      hasQuotes: true,
-    })
-    closeCanvassModal()
-  } catch (e) {
-    console.error('Save canvass error:', e)
-    canvassActionError.value = e?.message || 'Failed to record canvass order.'
-  } finally {
-    canvassActionLoading.value = false
-  }
-}
-
-function openPurchaseOrderedModal() {
-  const r = requisition.value
-  purchasePoNumber.value = r?.poNumber || ''
-  purchaseOrderedAt.value = r?.orderedAt
-    ? (r.orderedAt?.toDate ? r.orderedAt.toDate() : new Date(r.orderedAt))
-        .toISOString()
-        .slice(0, 10)
-    : new Date().toISOString().slice(0, 10)
-  purchaseActionError.value = ''
-  purchaseOrderedModal.value = true
-}
-function closePurchaseOrderedModal() {
-  purchaseOrderedModal.value = false
-  purchaseActionError.value = ''
-}
-async function savePurchaseOrdered() {
-  if (!requisition.value?.id) return
-  purchaseActionLoading.value = true
-  purchaseActionError.value = ''
-  try {
-    const user = authStore.user
-    await markRequisitionOrdered(requisition.value.id, {
-      poNumber: purchasePoNumber.value.trim() || undefined,
-      orderedAt: purchaseOrderedAt.value
-        ? new Date(purchaseOrderedAt.value + 'T12:00:00')
-        : new Date(),
-      orderedBy: user
-        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
-        : null,
-      signatureData: authStore.userProfile?.signatureData,
-    })
-    closePurchaseOrderedModal()
-  } catch (e) {
-    purchaseActionError.value = e?.message || 'Failed to mark as ordered.'
-  } finally {
-    purchaseActionLoading.value = false
-  }
-}
-
-function openPurchaseReceivedModal() {
-  const r = requisition.value
-  purchaseReceivedAt.value = r?.receivedAt
-    ? (r.receivedAt?.toDate ? r.receivedAt.toDate() : new Date(r.receivedAt))
-        .toISOString()
-        .slice(0, 10)
-    : new Date().toISOString().slice(0, 10)
-  purchaseActionError.value = ''
-  purchaseReceivedModal.value = true
-}
-function closePurchaseReceivedModal() {
-  purchaseReceivedModal.value = false
-  purchaseActionError.value = ''
-}
-async function savePurchaseReceived() {
-  if (!requisition.value?.id) return
-  purchaseActionLoading.value = true
-  purchaseActionError.value = ''
-  try {
-    const user = authStore.user
-    await markRequisitionReceived(requisition.value.id, {
-      receivedAt: purchaseReceivedAt.value
-        ? new Date(purchaseReceivedAt.value + 'T12:00:00')
-        : new Date(),
-      receivedBy: user
-        ? { userId: user.uid, name: authStore?.displayName, email: user.email }
-        : null,
-      signatureData: authStore.userProfile?.signatureData,
-    })
-    closePurchaseReceivedModal()
-  } catch (e) {
-    purchaseActionError.value = e?.message || 'Failed to mark as received.'
-  } finally {
-    purchaseActionLoading.value = false
-  }
-}
 
 function formatDate(val) {
   if (!val) return '—'
@@ -756,19 +330,7 @@ function doPrint() {
 }
 
 async function setPrintMode(mode) {
-  if (mode === 'pbac-form-01' && !canViewCanvass.value) return
-  if (mode === 'purchase-order' && !canViewPO.value) return
   printMode.value = mode
-
-  // Auto-generate PBAC Form No if missing and viewing PBAC Form
-  if (mode === 'pbac-form-01' && requisition.value && !requisition.value.pbacFormNo) {
-    try {
-      const nextNo = await generatePbacFormNo()
-      await updateRequisition(id.value, { pbacFormNo: nextNo })
-    } catch (e) {
-      console.error('Failed to auto-generate PBAC Form No:', e)
-    }
-  }
 }
 
 function initSubscriptions() {
@@ -792,21 +354,9 @@ function initSubscriptions() {
       error.value = 'Requisition not found.'
       return
     }
-
-    // Contextual Defaults:
-    // If we're coming from PO Approvals, default to Overview and PO Print Mode (if permitted)
-    if (
-      (from.value === 'po-approvals' || (!!r.poStatus && showProcurementDashboard.value)) &&
-      canViewPO.value
-    ) {
-      printMode.value = 'purchase-order'
-    } else {
-      // Ensure we don't land on a restricted form by default
-      printMode.value = 'fm-pur-05'
-    }
   })
 
-  // Subscribe to separate signatures (so Purchaser can print without bloating requisition doc).
+  // Subscribe to separate signatures (stored separately to keep the main requisition document lightweight).
   unsubscribeSigs = subscribeRequisitionSignatures(reqId, (map) => {
     sigMap.value = map || {}
   })
@@ -820,44 +370,6 @@ watch(id, () => {
   initSubscriptions()
 })
 
-onUnmounted(() => {
-  if (unsubscribe) unsubscribe()
-  if (unsubscribeSigs) unsubscribeSigs()
-  if (unsubscribeQuotes) unsubscribeQuotes()
-})
-
-// Quotes subscription
-watch(
-  () => id.value,
-  (newId) => {
-    if (unsubscribeQuotes) {
-      unsubscribeQuotes()
-      unsubscribeQuotes = null
-    }
-
-    if (newId) {
-      unsubscribeQuotes = subscribeRequisitionQuotes(
-        newId,
-        (data) => {
-          console.log('[DEBUG] subscribeRequisitionQuotes results:', data.length, 'items')
-          quotes.value = data
-        },
-        (err) => console.error('Error subscribing to quotes:', err),
-      )
-    }
-  },
-  { immediate: true },
-)
-
-function downloadQuote(quote) {
-  if (!quote.base64) return
-  const link = document.createElement('a')
-  link.href = quote.base64
-  link.download = `${quote.name || 'quote'}.png`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-}
 </script>
 <template>
   <div class="detail-view">
@@ -889,163 +401,53 @@ function downloadQuote(quote) {
 
       <!-- Read-only detail -->
       <div v-else class="detail-container-outer">
-        <!-- Dashboard Header: Only for approved requisitions processed by Procurement -->
-        <div v-if="showProcurementDashboard" class="procurement-dashboard-header no-print">
-          <div v-if="!requisition.poStatus" class="procurement-tracker">
-            <div
-              v-for="(milestone, idx) in milestones"
-              :key="milestone.id"
-              :class="['milestone', { done: milestone.done, current: milestone.current }]"
-            >
-              <div class="milestone-marker">
-                <span class="milestone-dot">
-                  <span v-if="milestone.done">✓</span>
-                </span>
-                <div v-if="idx < milestones.length - 1" class="milestone-line"></div>
-              </div>
-              <span class="milestone-label">{{ milestone.label }}</span>
-            </div>
-          </div>
-
-          <!-- PO Approval Tracker (only when PO exists) -->
-          <div v-else class="procurement-tracker po-tracker">
-            <div
-              v-for="(step, idx) in poStatusLog.entries"
-              :key="idx"
-              :class="['milestone', { done: step.done, current: step.current }]"
-            >
-              <div class="milestone-marker">
-                <span class="milestone-dot">
-                  <span v-if="step.done">✓</span>
-                </span>
-                <div v-if="idx < poStatusLog.entries.length - 1" class="milestone-line"></div>
-              </div>
-              <span class="milestone-label">{{ step.step }}</span>
-            </div>
-          </div>
-
-          <div class="dashboard-controls">
-            <div class="dashboard-tabs">
-              <button
-                type="button"
-                :class="['dash-tab', { active: activeTab === 'overview' }]"
-                @click="activeTab = 'overview'"
-              >
-                Overview
-              </button>
-              <button
-                type="button"
-                :class="['dash-tab', { active: activeTab === 'documents' }]"
-                @click="activeTab = 'documents'"
-              >
-                Official Documents
-              </button>
-            </div>
-
-            <!-- Unified Workflow Card -->
-            <div class="workflow-card">
-              <div class="workflow-status-groups">
-                <div class="status-group">
-                  <span class="status-group-label">Current Procurement Stage:</span>
-                  <span :class="['purchase-status-badge', unifiedProcurementStage.class]">{{
-                    unifiedProcurementStage.label
-                  }}</span>
-                </div>
-              </div>
-
-              <div v-if="nextActionPrompt" class="workflow-guidance">
-                <span class="guidance-icon">ℹ️</span>
-                <span class="guidance-text">{{ nextActionPrompt }}</span>
-              </div>
-
-              <div class="workflow-actions">
-                <button
-                  v-if="canvassStatusDisplay === CANVASS_STATUS.PENDING && isPurchaser"
-                  type="button"
-                  class="btn-dashboard-action primary"
-                  :disabled="purchaseActionLoading"
-                  @click="openCanvassModal"
-                >
-                  Create Canvass Order
-                </button>
-                <button
-                  v-else-if="
-                    canvassStatusDisplay === CANVASS_STATUS.ORDER_CREATED &&
-                    purchaseStatusDisplay === PURCHASE_STATUS.PENDING &&
-                    isPurchaser
-                  "
-                  type="button"
-                  class="btn-dashboard-action primary"
-                  :disabled="purchaseActionLoading"
-                  @click="openPurchaseOrderedModal"
-                >
-                  Mark as Ordered
-                </button>
-                <button
-                  v-else-if="purchaseStatusDisplay === PURCHASE_STATUS.ORDERED && isPurchaser"
-                  type="button"
-                  class="btn-dashboard-action primary"
-                  :disabled="purchaseActionLoading"
-                  @click="openPurchaseReceivedModal"
-                >
-                  Mark as Received
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Document Selector (Only if on Documents tab) -->
-          <div v-if="activeTab === 'documents'" class="doc-selector-bar">
-            <span class="selector-label">Select Form to View/Print:</span>
-            <div class="doc-btns">
-              <button
-                type="button"
-                :class="['doc-btn', { active: printMode === 'fm-pur-05' }]"
-                @click="setPrintMode('fm-pur-05')"
-              >
-                Requisition Form
-              </button>
-              <button
-                v-if="canViewCanvass"
-                type="button"
-                :class="['doc-btn', { active: printMode === 'pbac-form-01' }]"
-                @click="setPrintMode('pbac-form-01')"
-              >
-                PBAC Canvass Form
-              </button>
-              <button
-                v-if="canViewPO"
-                type="button"
-                :class="['doc-btn', { active: printMode === 'purchase-order' }]"
-                @click="setPrintMode('purchase-order')"
-              >
-                Purchase Order
-              </button>
-            </div>
-          </div>
-        </div>
 
         <div class="detail-content">
-          <!-- Documents Tab Content -->
-          <template v-if="showProcurementDashboard && activeTab === 'documents'">
-            <!-- Document 1: Purchase Order view -->
-            <div v-if="printMode === 'purchase-order' && canViewPO" class="print-form-container">
-              <PurchaseOrder :requisition="requisition" :signatures="sigMap" />
+          <!-- Rejection Alert Banner (Visible on Screen) -->
+          <div
+            v-if="requisition.status === REQUISITION_STATUS.REJECTED"
+            class="rejection-card no-print"
+          >
+            <div class="rejection-main">
+              <div class="rejection-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="28"
+                  height="28"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              </div>
+              <div class="rejection-details">
+                <h3>Requisition Rejected</h3>
+                <p>
+                  This request was declined by <strong>{{ requisition.rejectedBy?.name || 'Authorized Personnel' }}</strong>
+                  <span v-if="requisition.rejectedBy?.signedAt" class="rejection-time">
+                    on {{ formatDate(requisition.rejectedBy?.signedAt) }}
+                  </span>
+                </p>
+              </div>
             </div>
-
-            <!-- Document 2: PBAC Canvass view -->
-            <div
-              v-else-if="printMode === 'pbac-form-01' && canViewCanvass"
-              class="pbac-document form-container"
-            >
-              <PBACForm01 :requisition="requisition" :signatures="sigMap" />
+            <div v-if="requisition.rejectedBy?.remarks" class="rejection-reason-callout">
+              <div class="reason-label">REASON FOR REJECTION:</div>
+              <p class="reason-text">"{{ requisition.rejectedBy?.remarks }}"</p>
             </div>
+          </div>
 
-            <!-- Document 3: Default Requisition Form (FM-PUR-05) view -->
-            <div v-else class="form-document form-container">
+          <template v-if="printMode === 'fm-pur-05'">
+            <!-- Requisition Form (FM-PUR-05) always shown when printing -->
+            <div class="form-document form-container">
               <div v-for="i in 2" :key="i" class="print-page-wrapper" :class="{ 'print-only-copy': i === 2 }">
                 <div class="print-page">
-                  <div class="copy-label no-print-screen">COPY {{ i }}</div>
+                  <div class="copy-label no-print-screen">COPY {{ i }} ({{ i === 1 ? 'Original' : 'Duplicate' }})</div>
                   <!-- Unified Form Table (Header + Items) -->
                   <table class="form-unified-table">
                     <!-- Header Section -->
@@ -1087,7 +489,6 @@ function downloadQuote(quote) {
                         <th style="width: 80px">Unit</th>
                         <th>Description/Specifications</th>
                         <th style="width: 100px">Warehouse Inventory</th>
-                        <th style="width: 120px">Balance for Purchase</th>
                         <th style="width: 150px">Remarks</th>
                       </tr>
                     </thead>
@@ -1098,21 +499,9 @@ function downloadQuote(quote) {
                         <td class="item-cell">{{ item.unit || '—' }}</td>
                         <td class="item-cell">{{ item.description || '—' }}</td>
                         <td class="item-cell"></td>
-                        <td class="item-cell"></td>
                         <td class="item-cell">{{ item.remarks || '—' }}</td>
                       </tr>
-                      <!-- Empty rows to maintain layout -->
-                      <tr
-                        v-for="n in Math.max(0, 2 - (requisition.items?.length || 0))"
-                        :key="'empty-' + n"
-                      >
-                        <td class="item-cell">&nbsp;</td>
-                        <td class="item-cell"></td>
-                        <td class="item-cell"></td>
-                        <td class="item-cell"></td>
-                        <td class="item-cell"></td>
-                        <td class="item-cell"></td>
-                      </tr>
+                      <!-- Only show the actual requisition items, no extra rows -->
                       <!-- Purpose Row -->
                       <tr class="purpose-row">
                         <td colspan="6">
@@ -1322,12 +711,13 @@ function downloadQuote(quote) {
                     </div>
                   </div>
                 </div>
-                <!-- Separator between copies (only if they are on the same page) -->
-                <div v-if="i === 1 && !isLongForm" class="print-separator no-print-screen"></div>
+                <!-- Separator between copies - only if they fit on the same page -->
+                <div v-if="i === 1 && !isLongForm" class="print-separator-gap no-print-screen"></div>
               </div>
             </div>
+          </template>
 
-          </template><template v-else-if="!showProcurementDashboard || activeTab === 'overview'">
+          <template v-else>
             <div class="screen-view">
               <header class="detail-header">
                 <div class="detail-header-inner">
@@ -1351,21 +741,6 @@ function downloadQuote(quote) {
                   <div class="detail-block">
                     <span class="detail-block-label">RF Control No.</span>
                     <span class="detail-block-value">{{ requisition.rfControlNo || '—' }}</span>
-                  </div>
-                  <div v-if="requisition.pbacFormNo" class="detail-block">
-                    <span class="detail-block-label">PBAC Form No.</span>
-                    <span class="detail-block-value" style="display: flex; align-items: center; gap: 8px;">
-                      {{ requisition.pbacFormNo }}
-                      <button
-                        v-if="isAdmin"
-                        @click="overridePbacNo"
-                        class="btn-icon-link"
-                        title="Override PBAC No"
-                        style="color: #64748b; padding: 2px"
-                      >
-                        <Edit2 :size="14" />
-                      </button>
-                    </span>
                   </div>
                   <div class="detail-block">
                     <span class="detail-block-label">Date</span>
@@ -1392,80 +767,6 @@ function downloadQuote(quote) {
                 </div>
               </section>
 
-              <!-- Rejection Alert: Shown if PO was rejected -->
-              <section
-                v-if="requisition.poStatus === PO_STATUS.REJECTED && requisition.poRejectionRemarks"
-                class="meta-section card-section rejection-banner"
-              >
-                <div class="rejection-icon">⚠️</div>
-                <div class="rejection-body">
-                  <h3 class="rejection-title">Purchase Order Returned</h3>
-                  <p class="rejection-text">{{ requisition.poRejectionRemarks }}</p>
-                  <p class="rejection-meta">
-                    Rejected by <strong>{{ requisition.poRejectedBy?.name }}</strong>
-                  </p>
-                </div>
-              </section>
-
-              <!-- Receiving Info Section: Shown if items are received -->
-              <section
-                v-if="
-                  requisition.purchaseStatus === PURCHASE_STATUS.RECEIVED && requisition.receivedAt
-                "
-                class="meta-section card-section receiving-info-section"
-              >
-                <h2 class="card-section-title">
-                  <span class="card-section-title-text"
-                    >Delivery Confirmation (Finished Product Copy)</span
-                  >
-                </h2>
-                <div class="details-grid">
-                  <div class="detail-block">
-                    <span class="detail-block-label">Received By</span>
-                    <span class="detail-block-value">{{
-                      requisition.receivedBy?.name || '—'
-                    }}</span>
-                  </div>
-                  <div class="detail-block">
-                    <span class="detail-block-label">Date Received</span>
-                    <span class="detail-block-value">{{ formatDate(requisition.receivedAt) }}</span>
-                  </div>
-                  <div class="detail-block">
-                    <span class="detail-block-label">Fulfillment Note</span>
-                    <span class="detail-block-value text-success"
-                      >Completed & Verified via Procurement Hub</span
-                    >
-                  </div>
-                </div>
-              </section>
-
-              <!-- PO Info Section: Only if PO exists and user is in Procurement/Approval flow -->
-              <section
-                v-if="requisition.poNumber"
-                class="meta-section card-section po-info-section"
-              >
-                <h2 class="card-section-title">
-                  <span class="card-section-title-text">Purchase Order Details</span>
-                </h2>
-                <div class="details-grid">
-                  <div class="detail-block">
-                    <span class="detail-block-label">PO Number</span>
-                    <span class="detail-block-value po-number-badge">{{
-                      requisition.poNumber
-                    }}</span>
-                  </div>
-                  <div class="detail-block">
-                    <span class="detail-block-label">Supplier</span>
-                    <span class="detail-block-value">{{ requisition.supplier || '—' }}</span>
-                  </div>
-                  <div class="detail-block">
-                    <span class="detail-block-label">Total Amount (Inc. VAT)</span>
-                    <span class="detail-block-value">{{
-                      formatCurrency(computedPoTotalAmount)
-                    }}</span>
-                  </div>
-                </div>
-              </section>
 
               <section class="items-section card-section">
                 <h2 class="card-section-title">
@@ -1495,7 +796,7 @@ function downloadQuote(quote) {
                 </div>
               </section>
 
-              <section v-if="!requisition.poStatus" class="workflow-section card-section">
+              <section class="workflow-section card-section">
                 <h2 class="card-section-title">
                   <span class="card-section-title-text">Approval workflow</span>
                 </h2>
@@ -1539,7 +840,7 @@ function downloadQuote(quote) {
               </section>
 
               <section
-                v-if="!requisition.poStatus && (requisition.internalAuditorLog || []).length > 0"
+                v-if="(requisition.internalAuditorLog || []).length > 0"
                 class="audit-log-section card-section"
               >
                 <h2 class="card-section-title">
@@ -1561,43 +862,15 @@ function downloadQuote(quote) {
             </div>
           </template>
 
-          <!-- Attached Quotes Section (Only for BAC/Admin) - Placed outside tabs for constant visibility -->
-          <div v-if="canViewQuotes && quotes.length > 0" class="attached-quotes-section no-print">
-            <div class="quotes-header">
-              <div class="quotes-header-title">
-                <FileText :size="18" />
-                <span>Attached Supplier Quotes (3)</span>
-              </div>
-              <p class="quotes-header-desc">These attachments are visible only to the BAC and Admins.</p>
-            </div>
 
-            <div class="quotes-grid">
-              <div v-for="q in quotes" :key="q.id" class="quote-card">
-                <div class="quote-preview">
-                  <img :src="q.base64" :alt="q.name" />
-                  <div class="quote-overlay">
-                    <button class="btn-download" title="Download Quote" @click="downloadQuote(q)">
-                      <Download :size="20" />
-                    </button>
-                  </div>
-                </div>
-                <div class="quote-info">
-                  <span class="quote-name">{{ q.name }}</span>
-                  <button class="quote-action-link" @click="downloadQuote(q)">
-                    <Download :size="14" />
-                    Download
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- Actions: sticky bar so button is always visible and clickable -->
         <div
           class="detail-actions no-print"
-          v-if="canEditDraft || showApproveDecline || showProcurementDashboard"
+          v-if="canEditDraft || showApproveDecline || canPrint"
         >
+
           <template v-if="canEditDraft">
             <button
               type="button"
@@ -1658,12 +931,29 @@ function downloadQuote(quote) {
               Decline
             </button>
           </template>
-          <template v-else-if="showProcurementDashboard && activeTab === 'documents'">
+          <template v-else-if="canPrint">
             <button type="button" class="btn btn-primary btn-print" @click="doPrint">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="margin-right: 8px"
+              >
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
               Print / Save as PDF
             </button>
           </template>
         </div>
+
       </div>
     </template>
 
@@ -1837,357 +1127,7 @@ function downloadQuote(quote) {
         </div>
       </div>
     </div>
-    <!-- Create Canvass Order modal -->
-    <div
-      v-if="canvassModalOpen"
-      class="purchase-modal-overlay no-print"
-      @click.self="closeCanvassModal"
-    >
-      <div
-        class="purchase-modal-card co-modal-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="detail-modal-canvass-title"
-      >
-        <div class="purchase-modal-header">
-          <div class="purchase-modal-icon purchase-modal-icon-ordered" aria-hidden="true">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="22"
-              height="22"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <rect x="1" y="3" width="15" height="13" />
-              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8" />
-            </svg>
-          </div>
-          <div>
-            <h3 id="detail-modal-canvass-title" class="purchase-modal-title">
-              Submit Canvass to BAC
-            </h3>
-            <p class="purchase-modal-rf">RF {{ requisition?.rfControlNo || requisition?.id }}</p>
-          </div>
-        </div>
-        <div class="purchase-modal-body">
-          <p v-if="canvassActionError" class="purchase-modal-error">
-            {{ canvassActionError }}
-          </p>
-          <div class="purchase-modal-fields">
-            <label class="purchase-modal-field">
-              <span>Winning Supplier Name <span class="required-star">*</span></span>
-              <input
-                v-model="supplier"
-                type="text"
-                placeholder="Enter supplier / company name"
-                class="purchase-modal-input"
-              />
-            </label>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem">
-              <label class="purchase-modal-field">
-                <span>Canvass Order No. <span class="auto-badge">Auto</span></span>
-                <input v-model="canvassNumber" type="text" class="purchase-modal-input" />
-              </label>
-              <label class="purchase-modal-field">
-                <span>Canvass Date</span>
-                <input v-model="canvassDate" type="date" class="purchase-modal-input" />
-              </label>
-            </div>
-          </div>
 
-          <div class="modal-divider">Supplier Quotes (Required: 3 Images)</div>
-          <div class="hub-quote-grid">
-            <div v-for="(q, idx) in selectedQuotes" :key="idx" class="hub-quote-slot">
-              <div v-if="!q.base64" class="hub-quote-placeholder" @click="$refs['quoteInput' + idx][0].click()">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                <span>Upload Quote {{ idx + 1 }}</span>
-              </div>
-              <div v-else class="hub-quote-preview-wrap">
-                <img :src="q.base64" :alt="q.name" class="hub-quote-preview" />
-                <button class="hub-quote-remove" @click="clearQuote(idx)">&times;</button>
-                <div class="hub-quote-name">{{ q.name }}</div>
-              </div>
-              <input :ref="'quoteInput' + idx" type="file" accept="image/*" @change="handleQuoteFile($event, idx)" hidden />
-            </div>
-          </div>
-
-          <div class="modal-divider">Item Results (Unit Prices)</div>
-          <div class="modal-table-wrap">
-            <table class="modal-table">
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th style="width: 80px">Qty</th>
-                  <th style="width: 120px">Unit Price</th>
-                  <th style="width: 140px">Brand</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(item, idx) in canvassItems" :key="idx">
-                  <td class="td-desc">{{ item.description }}</td>
-                  <td class="td-center">{{ item.quantity }}</td>
-                  <td>
-                    <input
-                      v-model.number="item.unitPrice"
-                      type="number"
-                      step="0.01"
-                      class="cell-input text-right"
-                      placeholder="0.00"
-                    />
-                  </td>
-                  <td>
-                    <input
-                      v-model="item.brand"
-                      type="text"
-                      class="cell-input"
-                      placeholder="e.g. Samsung"
-                    />
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div v-if="!hasSignature" class="signature-warning" style="margin-top: 1rem">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-              />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-            <div class="warning-text">
-              <span><strong>Signature Required!</strong></span>
-              <p>
-                You must set up your digital signature in your Profile before submitting a canvass.
-              </p>
-              <router-link to="/profile" class="profile-link">Go to Profile →</router-link>
-            </div>
-          </div>
-        </div>
-        <div class="purchase-modal-actions">
-          <button
-            type="button"
-            class="purchase-modal-btn purchase-modal-btn-cancel"
-            @click="closeCanvassModal"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="purchase-modal-btn purchase-modal-btn-primary"
-            :disabled="canvassActionLoading || !hasSignature"
-            @click="saveCanvassOrder"
-          >
-            {{ canvassActionLoading ? 'Submitting…' : '✓ Submit to BAC' }}
-          </button>
-        </div>
-      </div>
-    </div>
-    <!-- Purchaser modals (no-print) — same professional style as Purchase List -->
-    <div
-      v-if="purchaseOrderedModal"
-      class="purchase-modal-overlay no-print"
-      @click.self="closePurchaseOrderedModal"
-    >
-      <div
-        class="purchase-modal-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="detail-modal-ordered-title"
-      >
-        <div class="purchase-modal-header">
-          <div class="purchase-modal-icon purchase-modal-icon-ordered" aria-hidden="true">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="22"
-              height="22"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <rect x="1" y="3" width="15" height="13" />
-              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8" />
-              <circle cx="5.5" cy="18.5" r="2.5" />
-              <circle cx="18.5" cy="18.5" r="2.5" />
-            </svg>
-          </div>
-          <div>
-            <h3 id="detail-modal-ordered-title" class="purchase-modal-title">Mark as ordered</h3>
-            <p class="purchase-modal-rf">RF {{ requisition?.rfControlNo || requisition?.id }}</p>
-          </div>
-        </div>
-        <div class="purchase-modal-body">
-          <p v-if="purchaseActionError" class="purchase-modal-error">
-            {{ purchaseActionError }}
-          </p>
-          <div class="purchase-modal-fields">
-            <label class="purchase-modal-field">
-              <span>PO number (optional)</span>
-              <input
-                v-model="purchasePoNumber"
-                type="text"
-                placeholder="e.g. PO-2024-001"
-                class="purchase-modal-input"
-              />
-            </label>
-            <label class="purchase-modal-field">
-              <span>Order date</span>
-              <input v-model="purchaseOrderedAt" type="date" class="purchase-modal-input" />
-            </label>
-          </div>
-        </div>
-        <div class="purchase-modal-actions">
-          <button
-            type="button"
-            class="purchase-modal-btn purchase-modal-btn-cancel"
-            @click="closePurchaseOrderedModal"
-          >
-            Cancel
-          </button>
-          <div v-if="!hasSignature" class="signature-warning">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-              />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-            <div class="warning-text">
-              <span><strong>Signature Required!</strong></span>
-              <p>
-                You must set up your digital signature in your Profile before taking this action.
-              </p>
-              <router-link to="/profile" class="profile-link">Go to Profile →</router-link>
-            </div>
-          </div>
-          <button
-            type="button"
-            class="purchase-modal-btn purchase-modal-btn-primary"
-            :disabled="purchaseActionLoading || !hasSignature"
-            @click="savePurchaseOrdered"
-          >
-            {{ purchaseActionLoading ? 'Saving…' : 'Mark ordered' }}
-          </button>
-        </div>
-      </div>
-    </div>
-    <div
-      v-if="purchaseReceivedModal"
-      class="purchase-modal-overlay no-print"
-      @click.self="closePurchaseReceivedModal"
-    >
-      <div
-        class="purchase-modal-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="detail-modal-received-title"
-      >
-        <div class="purchase-modal-header">
-          <div class="purchase-modal-icon purchase-modal-icon-received" aria-hidden="true">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="22"
-              height="22"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-              <polyline points="22 4 12 14.01 9 11.01" />
-            </svg>
-          </div>
-          <div>
-            <h3 id="detail-modal-received-title" class="purchase-modal-title">Mark as received</h3>
-            <p class="purchase-modal-rf">RF {{ requisition?.rfControlNo || requisition?.id }}</p>
-          </div>
-        </div>
-        <div class="purchase-modal-body">
-          <p v-if="purchaseActionError" class="purchase-modal-error">
-            {{ purchaseActionError }}
-          </p>
-          <div class="purchase-modal-fields">
-            <label class="purchase-modal-field">
-              <span>Received date</span>
-              <input v-model="purchaseReceivedAt" type="date" class="purchase-modal-input" />
-            </label>
-          </div>
-        </div>
-        <div class="purchase-modal-actions">
-          <button
-            type="button"
-            class="purchase-modal-btn purchase-modal-btn-cancel"
-            @click="closePurchaseReceivedModal"
-          >
-            Cancel
-          </button>
-          <div v-if="!hasSignature" class="signature-warning">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-              />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-            <div class="warning-text">
-              <span><strong>Signature Required!</strong></span>
-              <p>
-                You must set up your digital signature in your Profile before taking this action.
-              </p>
-              <router-link to="/profile" class="profile-link">Go to Profile →</router-link>
-            </div>
-          </div>
-          <button
-            type="button"
-            class="purchase-modal-btn purchase-modal-btn-primary"
-            :disabled="purchaseActionLoading || !hasSignature"
-            @click="savePurchaseReceived"
-          >
-            {{ purchaseActionLoading ? 'Saving…' : 'Mark received' }}
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -2394,8 +1334,30 @@ function downloadQuote(quote) {
 .print-page-wrapper {
   page-break-inside: avoid;
   break-inside: avoid;
-  /* If both copies fit on 1 page comfortably, they stay.
-     If copy 2 overflows even slightly, it gets pushed entirely to the next page. */
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.print-separator-gap {
+  height: 0;
+  margin: 10mm 0;
+  border-top: 2px dashed #94a3b8;
+  position: relative;
+  width: 100%;
+  display: block;
+}
+
+.print-separator-gap::after {
+  content: '✂ Tear Here';
+  position: absolute;
+  top: -8px;
+  right: 20px;
+  background: white;
+  padding: 0 10px;
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: bold;
 }
 
 .copy-label {
@@ -2425,7 +1387,7 @@ function downloadQuote(quote) {
     display: none !important;
   }
   .print-form-container,
-  .pbac-document,
+.form-document,
   .form-container {
     width: 100% !important;
     margin: 0 !important;
@@ -3151,517 +2113,7 @@ function downloadQuote(quote) {
   font-size: 0.875rem;
 }
 
-/* Purchase modals (Mark as ordered / Mark as received) — same as Purchase List */
-.purchase-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 1.5rem;
-}
-.purchase-modal-card {
-  background: #fff;
-  border-radius: 14px;
-  padding: 0;
-  min-width: 340px;
-  max-width: 440px;
-  width: 100%;
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.25),
-    0 0 0 1px rgba(0, 0, 0, 0.05);
-  border: 1px solid #e2e8f0;
-  overflow: hidden;
-}
-.purchase-modal-header {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 1.25rem 1.5rem 0;
-}
-.purchase-modal-icon {
-  width: 48px;
-  height: 48px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-}
-.purchase-modal-icon-ordered {
-  background: #eff6ff;
-  color: #2563eb;
-}
-.purchase-modal-icon-received {
-  background: #ecfdf5;
-  color: #059669;
-}
-.purchase-modal-title {
-  margin: 0;
-  font-size: 1.2rem;
-  font-weight: 600;
-  color: #0f172a;
-  letter-spacing: -0.02em;
-  line-height: 1.3;
-}
-.purchase-modal-rf {
-  margin: 0.2rem 0 0;
-  font-size: 0.8125rem;
-  color: #64748b;
-  font-weight: 500;
-}
-.purchase-modal-body {
-  padding: 1.25rem 1.5rem 1.5rem;
-}
-.purchase-modal-error {
-  margin: 0 0 1rem;
-  padding: 0.65rem 0.85rem;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  color: #b91c1c;
-  font-size: 0.8125rem;
-  line-height: 1.45;
-}
-.purchase-modal-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-.purchase-modal-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  font-size: 0.875rem;
-}
-.purchase-modal-field span {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: #475569;
-}
-.purchase-modal-input {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  background: #fff;
-  color: #0f172a;
-}
-.purchase-modal-input:focus {
-  outline: none;
-  border-color: #0ea5e9;
-  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.15);
-}
-.purchase-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 0 1.5rem 1.5rem;
-}
-.purchase-modal-btn {
-  padding: 0.6rem 1.25rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  border-radius: 8px;
-  cursor: pointer;
-  transition:
-    background 0.2s,
-    border-color 0.2s;
-}
-.purchase-modal-btn-cancel {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  color: #475569;
-}
-.purchase-modal-btn-cancel:hover {
-  background: #f8fafc;
-  border-color: #cbd5e1;
-  color: #0f172a;
-}
-.purchase-modal-btn-primary {
-  background: #2563eb;
-  border: none;
-  color: #fff;
-}
-.purchase-modal-btn-primary:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-.purchase-modal-btn-primary:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-/* PROCUREMENT DASHBOARD STYLES */
-.procurement-dashboard-header {
-  margin-bottom: 2rem;
-}
-
-/* PO Info Section */
-.po-info-section {
-  background: #f0f9ff;
-  border: 1px solid #e0f2fe;
-  border-left: 4px solid #0369a1;
-}
-
-.po-number-badge {
-  display: inline-block;
-  background: #eff6ff;
-  color: #1d4ed8;
-  padding: 0.2rem 0.5rem;
-  border-radius: 6px;
-  font-family: monospace;
-  font-weight: 600;
-  border: 1px solid #dbeafe;
-}
-
-/* Procurement Tracker (Redesigned to match Approval Stepper) */
-.procurement-tracker {
-  display: flex;
-  justify-content: space-between;
-  background: white;
-  padding: 1.75rem 2.5rem;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  margin-bottom: 2rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.milestone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  flex: 1;
-  position: relative;
-}
-
-.milestone-marker {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  margin-bottom: 0.75rem;
-}
-
-.milestone-dot {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: #f1f5f9;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px #cbd5e1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: #fff;
-  z-index: 2;
-  transition: all 0.3s ease;
-}
-
-.danger-title {
-  color: #dc2626 !important;
-}
-
-.milestone-line {
-  flex: 1;
-  height: 2px;
-  background: #e2e8f0;
-  margin: 0 -12px;
-  z-index: 1;
-}
-
-.milestone.done .milestone-dot {
-  background: #22c55e;
-  box-shadow: 0 0 0 1px #22c55e;
-  color: white;
-}
-
-.milestone.done .milestone-line {
-  background: #86efac;
-}
-
-.milestone.current .milestone-dot {
-  background: #3b82f6;
-  box-shadow: 0 0 0 1px #3b82f6;
-  color: white;
-}
-
-.milestone-label {
-  font-size: 0.6875rem;
-  font-weight: 700;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  transition: color 0.3s;
-}
-
-.milestone.done .milestone-label {
-  color: #334155;
-}
-
-.milestone.current .milestone-label {
-  color: #3b82f6;
-}
-
-/* Dashboard Controls */
-.dashboard-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: stretch;
-  gap: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.dashboard-tabs {
-  display: flex;
-  background: #f1f5f9;
-  padding: 0.35rem;
-  border-radius: 12px;
-  gap: 0.25rem;
-  height: fit-content;
-}
-
-.dash-tab {
-  padding: 0.6rem 1.5rem;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #64748b;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.dash-tab.active {
-  background: white;
-  color: #0f172a;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-}
-
-/* Workflow Card (Consolidated Status Bars) */
-.workflow-card {
-  flex: 1;
-  background: white;
-  padding: 1rem 1.5rem;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.workflow-status-groups {
-  display: flex;
-  gap: 2.5rem;
-}
-
-.status-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.status-group-label {
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.025em;
-}
-
-.workflow-guidance {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: #fdf2f8;
-  border: 1px solid #fbcfe8;
-  border-radius: 8px;
-  max-width: 400px;
-}
-
-.guidance-icon {
-  font-size: 1rem;
-}
-
-.guidance-text {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: #9d174d;
-  line-height: 1.4;
-}
-
-.btn-dashboard-action.primary {
-  background: #1e293b;
-  color: white;
-  padding: 0.75rem 1.5rem;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 0.875rem;
-  border: none;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.btn-dashboard-action.primary:hover {
-  background: #0f172a;
-}
-
-/* Doc Selector Bar */
-.doc-selector-bar {
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
-  padding: 0.75rem 1.5rem;
-  background: #f8fafc;
-  border-radius: 10px;
-  border: 1px dashed #cbd5e1;
-}
-
-.selector-label {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: #64748b;
-}
-
-.doc-btns {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.doc-btn {
-  padding: 0.45rem 1rem;
-  border-radius: 6px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  background: white;
-  border: 1px solid #e2e8f0;
-  color: #475569;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.doc-btn:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
-}
-
-.doc-btn.active {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  color: #2563eb;
-}
-
-/* Maintain original badge styles but integrated */
-.purchase-status-badge {
-  display: inline-block;
-  padding: 0.2rem 0.6rem;
-  border-radius: 6px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-.purchase-status-badge.pending {
-  background: #fef3c7;
-  color: #b45309;
-}
-.purchase-status-badge.ordered {
-  background: #e0f2fe;
-  color: #0369a1;
-}
-.purchase-status-badge.received {
-  background: #dcfce7;
-  color: #166534;
-}
-.purchase-status-badge.bac-processing {
-  background: #e0f2fe;
-  color: #1d4ed8;
-  border: 1px solid #bae6fd;
-}
-
-/* Purchaser: purchase status bar above form */
-.purchase-status-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 1rem;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1rem;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-}
-.purchase-status-info {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-.purchase-status-label {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #475569;
-}
-.purchase-status-bar .purchase-status-badge {
-  display: inline-block;
-  padding: 0.25rem 0.6rem;
-  border-radius: 6px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-.purchase-status-bar .purchase-status-badge.pending {
-  background: #fef3c7;
-  color: #b45309;
-}
-.purchase-status-bar .purchase-status-badge.ordered {
-  background: #e0f2fe;
-  color: #0369a1;
-}
-.purchase-status-bar .purchase-status-badge.received {
-  background: #dcfce7;
-  color: #166534;
-}
-.purchase-status-meta {
-  font-size: 0.8125rem;
-  color: #64748b;
-}
-.purchase-status-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-.btn-purchase-action {
-  padding: 0.5rem 1rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-.btn-purchase-action.ordered {
-  background: #e0f2fe;
-  color: #0369a1;
-  border-color: #7dd3fc;
-}
-.btn-purchase-action.ordered:hover:not(:disabled) {
-  background: #bae6fd;
-}
-.btn-purchase-action.received {
-  background: #dcfce7;
-  color: #166534;
-  border-color: #86efac;
-}
-.btn-purchase-action.received:hover:not(:disabled) {
-  background: #bbf7d0;
-}
-.btn-purchase-action:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
+/* End of Requisition Detail Styles */
 
 /* Loading overlay: spinner + text only, no white box */
 .loading-overlay {
@@ -3751,7 +2203,7 @@ function downloadQuote(quote) {
   display: none;
 }
 
-/* FM-PUR-05 form (purchaser view) - Leyeco III official layout */
+/* Requisition Form (FM-PUR-05) layout - Leyeco III official format */
 .form-document.form-container {
   font-family: Arial, sans-serif;
   background: #fff;
@@ -4076,51 +2528,56 @@ function downloadQuote(quote) {
  * Moved to non-scoped style to ensure it hits body, html, and container root perfectly.
  */
 @media print {
+  /* 
+     Aggressive Normalization: Remove all heights and overflows 
+     to let the browser handle natural paging for the 2-copy logic.
+  */
   html,
-  body {
-    height: auto !important;
-    overflow: visible !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    background: #fff !important;
-  }
-
-  /* Force display:block on all parent containers to unlock page breaks */
+  body,
   #app,
   .layout,
   .main-content,
   .main,
   .main-page,
+  .app-content,
   .detail-view,
   .detail-container-outer,
-  .detail-content,
-  .form-document.form-container,
-  .form-document,
-  .app-content {
-    display: block !important;
-    overflow: visible !important;
+  .form-container,
+  .detail-content {
     height: auto !important;
     min-height: 0 !important;
-    padding: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: block !important;
+    position: static !important;
     margin: 0 !important;
-    max-width: none !important;
+    padding: 0 !important;
+    transform: none !important;
     width: 100% !important;
-    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  /* Force display:block on the wrapper to allow natural stacking */
+  .print-page-wrapper {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    /* Smart avoidance: If the form doesn't fit on the current page, it will jump to the next one */
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .print-only-copy {
+    display: block !important;
+    margin-top: 2mm !important; /* Extremely tight margin for paper saving */
     border: none !important;
-    background: #fff !important;
   }
 
   /* Hide navigation elements from print */
   .sidebar,
   .header {
     display: none !important;
-  }
-
-  .print-page-wrapper {
-    display: block !important;
-    width: 100% !important;
-    page-break-inside: avoid !important;
-    break-inside: avoid !important;
   }
 
   .form-document .print-page {
@@ -4140,11 +2597,8 @@ function downloadQuote(quote) {
     color: #444 !important;
     font-weight: 900 !important;
     margin-bottom: 2px !important;
-  }
-
-  /* Force the second copy to show up when printing */
-  .print-only-copy {
-    display: block !important;
+    text-transform: uppercase;
+    font-size: 10px;
   }
 
   @page {
@@ -4164,41 +2618,120 @@ function downloadQuote(quote) {
 }
 
 /* Rejection Banner */
-.rejection-banner {
-  display: flex;
-  gap: 1.25rem;
-  background: #fef2f2;
-  border: 1px solid #fee2e2;
-  border-left: 5px solid #ef4444;
-  padding: 1.5rem;
+/* Rejection Card Premium Styling */
+.rejection-card {
   margin-bottom: 2rem;
-  border-radius: 12px;
+  background: #fff5f5;
+  border: 1px solid #fee2e2;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 10px 15px -3px rgba(220, 38, 38, 0.1);
+  animation: slideDown 0.4s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.rejection-main {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  background: linear-gradient(to right, #fee2e2, #fff5f5);
+  border-bottom: 1px solid #fee2e2;
 }
 
 .rejection-icon {
-  font-size: 1.75rem;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: #ef4444;
+  color: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.3);
 }
 
-.rejection-title {
-  margin: 0 0 0.5rem 0;
-  font-size: 1.125rem;
-  font-weight: 700;
-  color: #991b1b;
-}
-
-.rejection-text {
-  margin: 0 0 0.75rem 0;
-  color: #b91c1c;
-  line-height: 1.5;
-  font-size: 1rem;
-}
-
-.rejection-meta {
+.rejection-details h3 {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #991b1b;
+  letter-spacing: -0.01em;
+}
+
+.rejection-details p {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.9375rem;
+  color: #b91c1c;
+}
+
+.rejection-time {
+  margin-left: 0.5rem;
+  font-size: 0.8125rem;
+  opacity: 0.8;
+}
+
+.rejection-reason-callout {
+  padding: 1.25rem 1.5rem;
+  background: white;
+}
+
+.reason-label {
+  font-size: 0.6875rem;
+  font-weight: 800;
   color: #ef4444;
-  opacity: 0.9;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.5rem;
+}
+
+.reason-text {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+/* Stepper Remarks as Sticky Note */
+.stepper-remarks {
+  margin-top: 1rem !important;
+  padding: 1rem 1.25rem !important;
+  background: #fff9c4 !important; /* Yellow Sticky Note */
+  border-radius: 2px 2px 15px 2px !important;
+  font-size: 0.9375rem !important;
+  color: #5d4037 !important;
+  position: relative;
+  box-shadow: 3px 3px 10px rgba(0,0,0,0.1) !important;
+  transform: rotate(-0.5deg);
+  display: inline-block;
+  max-width: 90%;
+  border: 1px solid #fbc02d !important;
+}
+
+.stepper-remarks::before {
+  content: 'Reason:';
+  display: block;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #af8905;
+  margin-bottom: 4px;
+}
+
+.rejected .stepper-remarks {
+  background: #fee2e2 !important; /* Pink for Rejection note */
+  border-color: #fecaca !important;
+  color: #991b1b !important;
+  transform: rotate(0.5deg);
+}
+
+.rejected .stepper-remarks::before {
+  color: #dc2626;
 }
 
 /* Receiving Info Section Styles */
@@ -4259,7 +2792,7 @@ function downloadQuote(quote) {
   cursor: not-allowed;
 }
 
-/* Canvass Modal specific */
+/* Form Modal specific */
 .co-modal-card {
   max-width: 600px;
 }
@@ -4421,121 +2954,7 @@ function downloadQuote(quote) {
   margin-bottom: 1.5rem;
 }
 
-.quotes-header-title {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 0.25rem;
-}
 
-.quotes-header-desc {
-  font-size: 0.875rem;
-  color: #64748b;
-}
-
-.quotes-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 1.5rem;
-}
-
-.quote-card {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  overflow: hidden;
-  transition: all 0.2s ease;
-}
-
-.quote-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-}
-
-.quote-preview {
-  position: relative;
-  aspect-ratio: 4/3;
-  background: #fff;
-  overflow: hidden;
-}
-
-.quote-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  padding: 0.5rem;
-}
-
-.quote-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.quote-preview:hover .quote-overlay {
-  opacity: 1;
-}
-
-.btn-download {
-  background: white;
-  color: #0ea5e9;
-  border: none;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  transition: all 0.2s ease;
-}
-
-.btn-download:hover {
-  transform: scale(1.1);
-  background: #0ea5e9;
-  color: white;
-}
-
-.quote-info {
-  padding: 0.75rem 1rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.quote-name {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #475569;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.quote-action-link {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: #0ea5e9;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-}
-
-.quote-action-link:hover {
-  text-decoration: underline;
-}
 
 .text-success {
   color: #10b981;

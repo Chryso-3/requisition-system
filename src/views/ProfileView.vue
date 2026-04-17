@@ -42,7 +42,7 @@ function showStatus(status, title, message) {
 const profile = computed(() => authStore.userProfile)
 const email = computed(() => authStore.user?.email ?? '—')
 const roleLabel = computed(() => USER_ROLE_LABELS[authStore?.role] ?? authStore?.role)
-const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
+
 /** E-signature: base64 stored in Firestore (no Storage required) */
 const signatureData = computed(() => profile.value?.signatureData ?? null)
 const memberSince = computed(() => {
@@ -518,7 +518,7 @@ async function changePassword() {
             </div>
           </section>
 
-          <!-- E-Signature Card (Now available for all roles including Purchaser) -->
+          <!-- E-Signature Card (Now available for all system roles) -->
           <section class="card card-signature card-animate">
             <div class="card-glow card-glow-green"></div>
             <div class="card-header">
@@ -590,8 +590,7 @@ async function changePassword() {
                     <p class="sig-zone-title">Upload Signature Image</p>
                     <p class="sig-zone-hint">
                       PNG or JPG format recommended. Requestors and approvers: this signature
-                      appears on requisition forms. Purchasers/Canvassers: this signature will be
-                      used for procurement records and canvas forms.
+                      appears on requisition forms.
                     </p>
                     <span class="sig-zone-browse">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

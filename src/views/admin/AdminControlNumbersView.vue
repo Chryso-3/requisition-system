@@ -14,16 +14,10 @@ import {
 
 const counters = ref({
   rf: 0,
-  canvass: 0,
-  po: 0,
-  pbac: 0,
   year: new Date().getFullYear(),
 })
 const editValues = ref({
   rf: '',
-  canvass: '',
-  po: '',
-  pbac: '',
 })
 const loading = ref(true)
 const saving = ref(null)
@@ -60,9 +54,6 @@ async function fetchCounters() {
     if (counters.value) {
       editValues.value = {
         rf: (counters.value.rf || 0).toString(),
-        canvass: (counters.value.canvass || 0).toString(),
-        po: (counters.value.po || 0).toString(),
-        pbac: (counters.value.pbac || 0).toString(),
       }
     }
   } catch (error) {
@@ -162,13 +153,15 @@ onUnmounted(() => {
     </div>
 
     <div class="info-banner">
-      <Info :size="20" />
-      <div class="info-content">
-        <strong>How numbering works:</strong>
-        <p>
-          The system uses atomic counters to generate sequential numbers. Overriding a counter sets
-          the "last used number". The next document created will use the next sequential number.
-        </p>
+      <div class="info-content-flex">
+        <Info :size="20" class="info-icon" />
+        <div class="info-text">
+          <strong>How numbering works:</strong>
+          <p>
+            The system uses atomic counters to generate sequential requisition numbers. Overriding a counter sets
+            the "last used number". The next document created will use the next sequential number.
+          </p>
+        </div>
       </div>
     </div>
 
@@ -205,109 +198,6 @@ onUnmounted(() => {
               :disabled="saving === 'rf'"
             >
               {{ saving === 'rf' ? '...' : 'Override' }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Canvass Counter -->
-      <div class="glass-card elite-card animate-staggered" style="--order: 1">
-        <div class="card-header">
-          <div class="icon-orb canvass-orb"><Hash :size="20" /></div>
-          <h3 class="elite-h3">Canvass No.</h3>
-        </div>
-        <div class="current-value">
-          <span class="elite-label">Yearly Reset Counter ({{ selectedYear }}):</span>
-          <span class="elite-value">{{ String(counters.canvass).padStart(3, '0') }}</span>
-        </div>
-        <div class="elite-next-preview">
-          Next expected:
-          <strong>CO-{{ selectedYear }}-{{ String(counters.canvass + 1).padStart(3, '0') }}</strong>
-        </div>
-        <div class="card-footer-elite">
-          <div class="elite-input-group">
-            <input
-              v-model="editValues.canvass"
-              type="number"
-              placeholder="Set last no."
-              class="elite-input"
-            />
-            <button
-              @click="handleUpdate('canvass')"
-              class="btn-elite-update"
-              :disabled="saving === 'canvass'"
-            >
-              {{ saving === 'canvass' ? '...' : 'Override' }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- PO Counter -->
-      <div class="glass-card elite-card animate-staggered" style="--order: 2">
-        <div class="card-header">
-          <div class="icon-orb po-orb"><Hash :size="20" /></div>
-          <h3 class="elite-h3">Purchase Order No.</h3>
-        </div>
-        <div class="current-value">
-          <span class="elite-label">Yearly Reset Counter ({{ selectedYear }}):</span>
-          <span class="elite-value">{{ String(counters.po).padStart(3, '0') }}</span>
-        </div>
-        <div class="elite-next-preview">
-          Next expected:
-          <strong>PO-{{ selectedYear }}-{{ String(counters.po + 1).padStart(3, '0') }}</strong>
-        </div>
-        <div class="card-footer-elite">
-          <div class="elite-input-group">
-            <input
-              v-model="editValues.po"
-              type="number"
-              placeholder="Set last no."
-              class="elite-input"
-            />
-            <button
-              @click="handleUpdate('po')"
-              class="btn-elite-update"
-              :disabled="saving === 'po'"
-            >
-              {{ saving === 'po' ? '...' : 'Override' }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- PBAC Counter -->
-      <div class="glass-card elite-card animate-staggered" style="--order: 3">
-        <div class="card-header">
-          <div class="icon-orb pbac-orb"><Hash :size="20" /></div>
-          <h3 class="elite-h3">PBAC Form 01 Serial</h3>
-        </div>
-        <div class="current-value">
-          <span class="elite-label">Yearly Reset Counter ({{ selectedYear }}):</span>
-          <span class="elite-value">{{ String(counters.pbac).padStart(4, '0') }}</span>
-        </div>
-        <div class="elite-next-preview">
-          Next expected:
-          <strong
-            >PBAC-{{ String(new Date().getMonth() + 1).padStart(2, '0') }}-{{ selectedYear }}-{{
-              String(counters.pbac + 1).padStart(4, '0')
-            }}</strong
-          >
-        </div>
-        <div class="card-footer-elite">
-          <div class="elite-input-group">
-            <input
-              v-model="editValues.pbac"
-              type="number"
-              placeholder="Set last no."
-              class="elite-input"
-            />
-            <button
-              @click="handleUpdate('pbac')"
-              class="btn-elite-update"
-              :disabled="saving === 'pbac'"
-            >
-              {{ saving === 'pbac' ? '...' : 'Override' }}
             </button>
           </div>
         </div>
@@ -472,15 +362,7 @@ onUnmounted(() => {
 .rf-orb {
   background: linear-gradient(135deg, #0ea5e9, #0284c7);
 }
-.canvass-orb {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-}
-.po-orb {
-  background: linear-gradient(135deg, #ef4444, #b91c1c);
-}
-.pbac-orb {
-  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
-}
+/* Removed legacy procurement orbs */
 
 .elite-label {
   font-size: 0.8rem;

@@ -38,9 +38,7 @@ export const useAuthStore = defineStore('auth', () => {
     const r = userProfile.value?.role
     if (!r) return USER_ROLES.REQUESTER
     // Normalize: if it's a label, try to find the key, otherwise return as is
-    if (r === 'BAC Secretary') return USER_ROLES.BAC_SECRETARY
     if (r === 'Super Administrator') return USER_ROLES.SUPER_ADMIN
-    if (r === 'Purchaser') return USER_ROLES.PURCHASER
     return r
   })
   const department = computed(() => userProfile.value?.department ?? null)

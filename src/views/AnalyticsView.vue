@@ -33,14 +33,11 @@ const loading = ref(true)
 const error = ref(null)
 const seeding = ref(false)
 const confirmSyncOpen = ref(false)
-const pipelinePhase = ref('requisition') // 'requisition' or 'po'
-const bottleneckPhase = ref('requisition') // 'requisition' or 'po'
 let unsubSummary = null
 let chartPipeline = null
 let chartDepartment = null
 let chartApprovedRejected = null
 let chartTrend = null
-let chartPurchase = null
 let chartBottlenecks = null
 let chartFinancials = null
 
@@ -69,18 +66,13 @@ function updateData() {
   const s = summaryData.value
   const now = new Date()
 
-  // All known workflow stages – used to guarantee Req + PO charts always render
+  // All known workflow stages – used to guarantee Req charts always render
   const ALL_STAGES = [
     'submission_to_recommend',
     'recommend_to_inventory',
     'inventory_to_budget',
     'budget_to_audit',
     'audit_to_gm',
-    'gm_to_fulfillment',
-    'req_appr_to_po_issue',
-    'po_issue_to_po_budget',
-    'po_budget_to_po_audit',
-    'po_audit_to_po_gm',
   ]
 
   // ── 1. Build sorted, chronological filteredMonths list ───────────────────
@@ -109,9 +101,7 @@ function updateData() {
     leadTimeCount: 0,
     byStatus: {},
     byDepartment: {},
-    poByStatus: {},
     durations: Object.fromEntries(ALL_STAGES.map((k) => [k, zeroDur()])),
-    purchaseBreakdown: { pending: 0, ordered: 0, received: 0 },
     departmentalSpend: {},
   }
 
@@ -130,18 +120,12 @@ function updateData() {
     Object.entries(b.byDepartment || {}).forEach(([k, v]) => {
       agg.byDepartment[k] = (agg.byDepartment[k] || 0) + v
     })
-    Object.entries(b.poByStatus || {}).forEach(([k, v]) => {
-      agg.poByStatus[k] = (agg.poByStatus[k] || 0) + v
-    })
     Object.entries(b.durations || {}).forEach(([k, v]) => {
       if (!agg.durations[k]) agg.durations[k] = zeroDur()
       agg.durations[k].totalMs += v.totalMs || 0
       agg.durations[k].count += v.count || 0
       agg.durations[k].activeTotalMs += v.activeTotalMs || 0
       agg.durations[k].activeCount += v.activeCount || 0
-    })
-    Object.entries(b.purchaseBreakdown || {}).forEach(([k, v]) => {
-      agg.purchaseBreakdown[k] = (agg.purchaseBreakdown[k] || 0) + v
     })
     Object.entries(b.departmentalSpend || {}).forEach(([k, v]) => {
       agg.departmentalSpend[k] = (agg.departmentalSpend[k] || 0) + v
@@ -154,7 +138,6 @@ function updateData() {
   const hasSubData = Object.values(agg.byStatus).some((v) => v > 0)
   const byStatusSrc = hasSubData ? agg.byStatus : s.byStatus || {}
   const byDeptSrc = hasSubData ? agg.byDepartment : s.byDepartment || {}
-  const poByStatusSrc = hasSubData ? agg.poByStatus : s.poByStatus || {}
   const deptSpendSrc = hasSubData ? agg.departmentalSpend : s.departmentalSpend || {}
 
   const effApproved =
@@ -208,14 +191,6 @@ function updateData() {
     }))
     .sort((a, b) => b.count - a.count)
 
-  const poStatusOrder = ['pending_budget', 'pending_audit', 'pending_gm', 'approved', 'rejected']
-  const poTotal = Object.values(poByStatusSrc).reduce((a, b) => a + b, 0)
-  const poPipelineWithPct = poStatusOrder.map((status) => ({
-    status,
-    count: poByStatusSrc[status] || 0,
-    pct: poTotal > 0 ? Math.round(((poByStatusSrc[status] || 0) / poTotal) * 100) : 0,
-  }))
-
   // Trend chart: ALWAYS show Jan-Dec of the current year for "Strategic" context
   const trendMonths = []
   for (let i = 0; i < 12; i++) {
@@ -244,7 +219,6 @@ function updateData() {
       : now
   const elapsedMs = Math.max(0, now - lastUpdated)
 
-  // Bottlenecks: MAP from full ALL_STAGES list (guarantees Req + PO always render)
   const bottlenecks = ALL_STAGES.map((stage) => {
     // For historical averages, we use the date-preset filtered durations (durSrc)
     const durFiltered = durSrc[stage] || zeroDur()
@@ -291,7 +265,6 @@ function updateData() {
       avgOrderValue: effApproved > 0 ? effValue / effApproved : 0,
     },
     pipelineWithPct,
-    poPipelineWithPct,
     byDepartment,
     monthlyTrend,
     approvedVsRejected: {
@@ -300,7 +273,6 @@ function updateData() {
       approvedPct: gTotal > 0 ? Math.round((gApproved / gTotal) * 100) : 0,
       rejectedPct: gTotal > 0 ? Math.round((gRejected / gTotal) * 100) : 0,
     },
-    purchaseBreakdown: agg.purchaseBreakdown,
     productivity: { bottlenecks },
     financials: {
       departmentalSpend: Object.entries(deptSpendSrc)
@@ -362,10 +334,7 @@ function destroyCharts() {
     chartTrend.destroy()
     chartTrend = null
   }
-  if (chartPurchase) {
-    chartPurchase.destroy()
-    chartPurchase = null
-  }
+
   if (chartBottlenecks) {
     chartBottlenecks.destroy()
     chartBottlenecks = null
@@ -386,8 +355,6 @@ const chartColors = {
   approved: '#10b981',
   rejected: '#ef4444',
   pending: '#fbbf24',
-  ordered: '#3b82f6',
-  received: '#10b981',
 }
 
 function formatPeso(val) {
@@ -461,28 +428,16 @@ function renderCharts() {
   // 1. Pipeline Chart (Phase Aware)
   const pipelineEl = document.getElementById('chart-pipeline')
   if (pipelineEl) {
-    const isReq = pipelinePhase.value === 'requisition'
-    const chartData = isReq ? data.value.pipelineWithPct || [] : data.value.poPipelineWithPct || []
+    const chartData = data.value.pipelineWithPct || []
     console.log('[Analytics] Rendering Pipeline Chart:', {
-      phase: pipelinePhase.value,
       chartData: JSON.parse(JSON.stringify(chartData)),
     })
 
     const labels = chartData.map((p) => {
-      if (isReq) return `${STATUS_LABELS[p.status] || p.status} — ${p.count} (${p.pct}%)`
-      const poLabelMap = {
-        pending_budget: 'Waiting for Budget',
-        pending_audit: 'Waiting for Audit',
-        pending_gm: 'Waiting for GM',
-        approved: 'Fully Issued',
-        rejected: 'PO Rejected',
-      }
-      return `${poLabelMap[p.status] || p.status} — ${p.count} (${p.pct}%)`
+      return `${STATUS_LABELS[p.status] || p.status} — ${p.count} (${p.pct}%)`
     })
 
-    const chartColors = isReq
-      ? chartData.map((p) => getStageColor(p.status))
-      : ['#5eead4', '#2dd4bf', '#14b8a6', '#0f766e'] // Subtle teal gradient for PO
+    const chartColors = chartData.map((p) => getStageColor(p.status))
 
     // Build gradient fills per bar
     const pipelineCtx = pipelineEl.getContext('2d')
@@ -499,7 +454,7 @@ function renderCharts() {
         labels,
         datasets: [
           {
-            label: isReq ? 'Requisitions' : 'Purchase Orders',
+            label: 'Requisitions',
             data: chartData.map((p) => p.count),
             backgroundColor: gradientColors,
             barThickness: 18,
@@ -742,56 +697,33 @@ function renderCharts() {
   // 6. Bottleneck Analysis (Phase Aware)
   const bottleneckEl = document.getElementById('chart-bottlenecks')
   if (bottleneckEl && data.value.productivity?.bottlenecks?.length) {
-    const isReq = bottleneckPhase.value === 'requisition'
-    const allowed = isReq
-      ? [
-          'submission_to_recommend',
-          'recommend_to_inventory',
-          'inventory_to_budget',
-          'budget_to_audit',
-          'audit_to_gm',
-          'gm_to_fulfillment',
-        ]
-      : [
-          'req_appr_to_po_issue',
-          'po_issue_to_po_budget',
-          'po_budget_to_po_audit',
-          'po_audit_to_po_gm',
-        ]
+    const allowed = [
+      'submission_to_recommend',
+      'recommend_to_inventory',
+      'inventory_to_budget',
+      'budget_to_audit',
+      'audit_to_gm',
+    ]
 
     const bn = allowed.map((stage) => {
       const match = data.value.productivity.bottlenecks.find((b) => b.stage === stage)
       return match || { stage, avgDays: 0, activeCount: 0, activeAvgDays: 0 }
     })
     console.log('[Analytics] Rendering Bottlenecks Chart:', {
-      phase: bottleneckPhase.value,
       bottlenecks: JSON.parse(JSON.stringify(bn)),
     })
-    const bnLabels = isReq
-      ? {
-          submission_to_recommend: 'Subm → Rec',
-          recommend_to_inventory: 'Rec → Inv',
-          inventory_to_budget: 'Inv → Budg',
-          budget_to_audit: 'Budg → Aud',
-          audit_to_gm: 'Aud → GM',
-          gm_to_fulfillment: 'Approved → Received',
-        }
-      : {
-          req_appr_to_po_issue: 'Appr → Issued',
-          po_issue_to_po_budget: 'Issued → Budget',
-          po_budget_to_po_audit: 'Budget → Audit',
-          po_audit_to_po_gm: 'Audit → GM Final',
-        }
+    const bnLabels = {
+      submission_to_recommend: 'Subm → Rec',
+      recommend_to_inventory: 'Rec → Inv',
+      inventory_to_budget: 'Inv → Budg',
+      budget_to_audit: 'Budg → Aud',
+      audit_to_gm: 'Aud → GM',
+    }
 
     const ctx = bottleneckEl.getContext('2d')
     const gradient = ctx.createLinearGradient(0, 0, 400, 0)
-    if (isReq) {
-      gradient.addColorStop(0, '#f43f5e') // rose-500
-      gradient.addColorStop(1, '#fb7185') // rose-400
-    } else {
-      gradient.addColorStop(0, '#14b8a6') // teal-500
-      gradient.addColorStop(1, '#2dd4bf') // teal-400
-    }
+    gradient.addColorStop(0, '#f43f5e') // rose-500
+    gradient.addColorStop(1, '#fb7185') // rose-400
 
     chartBottlenecks = new Chart(bottleneckEl, {
       type: 'bar',
@@ -942,7 +874,7 @@ watch(dateRangePreset, () => {
   updateData()
 })
 watch(
-  [data, pipelinePhase, bottleneckPhase, dateRangePreset],
+  [data, dateRangePreset],
   async () => {
     if (data.value && !loading.value) {
       await nextTick()
@@ -1185,30 +1117,16 @@ onUnmounted(() => {
                     class="text-lg font-extrabold tracking-tight text-slate-900 mb-2"
                   >
                     {{
-                      pipelinePhase === 'requisition'
-                        ? 'Requisition Pipeline'
-                        : 'PO Approval Pipeline'
+                      'Requisition Pipeline'
                     }}
                   </h3>
                   <p class="text-xs text-muted-foreground">
                     {{
-                      pipelinePhase === 'requisition'
-                        ? 'Status of initial requisition requests'
-                        : 'Tracking Purchase Orders through Budget, Audit, and GM approval'
+                      'Status of initial requisition requests'
                     }}
                   </p>
                 </div>
-                <div class="mini-switcher">
-                  <button
-                    :class="{ active: pipelinePhase === 'requisition' }"
-                    @click="pipelinePhase = 'requisition'"
-                  >
-                    Req
-                  </button>
-                  <button :class="{ active: pipelinePhase === 'po' }" @click="pipelinePhase = 'po'">
-                    PO
-                  </button>
-                </div>
+                  <!-- PO Pipeline removed -->
               </div>
               <div class="h-[240px]">
                 <canvas id="chart-pipeline"></canvas>
@@ -1225,33 +1143,16 @@ onUnmounted(() => {
                     class="text-lg font-extrabold tracking-tight text-slate-900 mb-2"
                   >
                     {{
-                      bottleneckPhase === 'requisition'
-                        ? 'Requisition Bottlenecks'
-                        : 'PO Approval Bottlenecks'
+                      'Requisition Bottlenecks'
                     }}
                   </h3>
                   <p class="text-xs text-muted-foreground">
                     {{
-                      bottleneckPhase === 'requisition'
-                        ? 'Historical averages vs. current aging for requisition stages'
-                        : 'Historical averages vs. current aging for PO approval steps'
+                      'Historical averages vs. current aging for requisition stages'
                     }}
                   </p>
                 </div>
-                <div class="mini-switcher">
-                  <button
-                    :class="{ active: bottleneckPhase === 'requisition' }"
-                    @click="bottleneckPhase = 'requisition'"
-                  >
-                    Req
-                  </button>
-                  <button
-                    :class="{ active: bottleneckPhase === 'po' }"
-                    @click="bottleneckPhase = 'po'"
-                  >
-                    PO
-                  </button>
-                </div>
+                  <!-- PO Bottleneck tracker removed -->
               </div>
               <div class="h-[240px]">
                 <canvas id="chart-bottlenecks"></canvas>

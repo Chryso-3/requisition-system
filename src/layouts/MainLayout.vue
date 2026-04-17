@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { USER_ROLE_LABELS, USER_ROLES, PURCHASE_STATUS } from '@/firebase/collections'
+import { USER_ROLE_LABELS, USER_ROLES } from '@/firebase/collections'
 import { listRequisitionsSimple, APPROVAL_WORKFLOW } from '@/services/requisitionService'
 import { useSystemStore } from '@/stores/system'
 import { useNotificationStore } from '@/stores/notifications'
@@ -24,7 +24,6 @@ const systemStore = useSystemStore()
 const notificationStore = useNotificationStore()
 const showUserMenu = ref(false)
 const showNotificationMenu = ref(false)
-const pendingPOCount = ref(0) // legacy cleanup?
 const pendingCount = computed(() => notificationStore.unreadCount)
 
 // Template Refs for robust click-outside
@@ -44,8 +43,6 @@ const canViewLogs = computed(
     authStore?.role === USER_ROLES.SUPER_ADMIN,
 )
 const isGeneralManager = computed(() => authStore?.role === USER_ROLES.GENERAL_MANAGER)
-const isPurchaser = computed(() => authStore?.role === USER_ROLES.PURCHASER)
-const isBACSecretary = computed(() => authStore?.role === USER_ROLES.BAC_SECRETARY)
 const isSuperAdmin = computed(() => authStore?.role === USER_ROLES.SUPER_ADMIN)
 
 function loadPendingCount() {
@@ -54,10 +51,6 @@ function loadPendingCount() {
   notificationStore.initNotificationListener()
 }
 
-const poApprovalsLabel = computed(() => {
-  if (authStore?.role === USER_ROLES.PURCHASER) return 'POs to Order'
-  return '2. PO Approvals'
-})
 
 async function onSignOut() {
   await authStore.signOut()
@@ -98,28 +91,7 @@ function handleClickOutside(event) {
 }
 
 function handleNotificationClick(notif) {
-  const role = authStore.role
-  const isPOApprover = ['budget_officer', 'internal_auditor', 'general_manager'].includes(role)
-
-  if (role === USER_ROLES.PURCHASER) {
-    if (notif._type === 'po') {
-      router.push('/po-approvals')
-    } else {
-      // For RF types, decide based on status
-      if (notif.purchaseStatus === PURCHASE_STATUS.ORDERED) {
-        router.push({ path: '/procurement-hub', query: { tab: 'receiving' } })
-      } else {
-        router.push({ path: '/procurement-hub', query: { tab: 'canvassing' } })
-      }
-    }
-  } else if (notif._type === 'po' && isPOApprover) {
-    router.push('/po-approvals')
-  } else if (role === USER_ROLES.BAC_SECRETARY) {
-    // BAC Secretary needs to see the detail page but contextually from their dashboard
-    router.push({ path: `/requisitions/${notif.id}`, query: { from: 'bac-dashboard' } })
-  } else {
-    router.push(`/requisitions/${notif.id}`)
-  }
+  router.push(`/requisitions/${notif.id}`)
   showNotificationMenu.value = false
 }
 
@@ -197,79 +169,9 @@ watch(
             <span>My Requisitions</span>
           </router-link>
         </template>
-        <template v-if="isPurchaser">
-          <router-link to="/procurement-hub" class="nav-item" active-class="active">
-            <span class="nav-icon">
-              <!-- Realistic Golden Shopping Bag -->
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path d="M6 8H18L19 20H5L6 8Z" fill="#F59E0B" />
-                <path
-                  d="M9 10V6C9 4.34315 10.3431 3 12 3C13.6569 3 15 4.34315 15 6V10"
-                  stroke="#D97706"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                />
-                <path d="M6 10H18V12H6V10Z" fill="#D97706" fill-opacity="0.2" />
-                <circle cx="12" cy="14" r="2" fill="#FEF3C7" fill-opacity="0.5" />
-              </svg>
-            </span>
-            <span>Procurement Hub</span>
-          </router-link>
-        </template>
-        <template v-if="isBACSecretary">
-          <router-link to="/bac-dashboard" class="nav-item" active-class="active">
-            <span class="nav-icon">
-              <!-- Realistic Red Rubber Stamp -->
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path d="M12 4V10" stroke="#991B1B" stroke-width="4" stroke-linecap="round" />
-                <path d="M8 10H16V14H8V10Z" fill="#991B1B" />
-                <rect x="6" y="14" width="12" height="4" rx="1" fill="#DC2626" />
-                <path
-                  d="M7 18H17V20C17 20.5523 16.5523 21 16 21H8C7.44772 21 7 20.5523 7 20V18Z"
-                  fill="#B91C1C"
-                />
-              </svg>
-            </span>
-            <span>2. Issue Purchase Order</span>
-          </router-link>
-          <router-link v-if="canViewLogs" to="/audit-log" class="nav-item" active-class="active">
-            <span class="nav-icon">
-              <!-- Realistic Slate/Blue Clock Icon -->
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <circle cx="12" cy="12" r="9" stroke="#64748B" stroke-width="2" />
-                <circle cx="12" cy="12" r="7" fill="#F8FAF8" />
-                <path
-                  d="M12 7V12L15 14"
-                  stroke="#D946EF"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-                <circle cx="12" cy="12" r="1.5" fill="#64748B" />
-              </svg>
-            </span>
-            <span>Logs</span>
-          </router-link>
-        </template>
-        <template v-if="isApprover && !isPurchaser && !isBACSecretary && !isSuperAdmin">
+
+
+        <template v-if="isApprover && !isSuperAdmin">
           <router-link to="/all-requisitions" class="nav-item" active-class="active">
             <span class="nav-icon">
               <!-- Realistic Stacked Folders (Indigo/Amber) -->
@@ -297,46 +199,8 @@ watch(
             </span>
             <span class="nav-text">All Requisitions</span>
           </router-link>
-          <router-link
-            v-if="
-              authStore?.role &&
-              ['budget_officer', 'internal_auditor', 'general_manager', 'purchaser'].includes(authStore.role)
-            "
-            to="/po-approvals"
-            class="nav-item"
-            active-class="active"
-          >
-            <span class="nav-icon">
-              <!-- Realistic Document with Green Check -->
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <rect
-                  x="5"
-                  y="3"
-                  width="14"
-                  height="18"
-                  rx="2"
-                  stroke="#CBD5E1"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                />
-                <circle cx="17" cy="17" r="6" fill="#10B981" />
-                <path
-                  d="M14.5 17L16 18.5L19.5 15"
-                  stroke="white"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </span>
-            <span class="nav-text">PO Approvals</span>
-          </router-link>
+
+
 
           <router-link v-if="canViewLogs" to="/audit-log" class="nav-item" active-class="active">
             <span class="nav-icon">

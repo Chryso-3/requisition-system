@@ -58,12 +58,6 @@ const CSV_COLS = [
   'Approved By (GM)',
   'Rejected By',
   'Rejection Remarks',
-  'Purchase Status',
-  'PO Number',
-  'Ordered By',
-  'Ordered At',
-  'Received By',
-  'Received At',
   'Items Count',
   'Item Details',
 ]
@@ -71,14 +65,11 @@ const CSV_COLS = [
 function requisitionToCsvRow(r) {
   const date = toDateValue(r.date)
   const dateIso = date ? date.toISOString().slice(0, 10) : ''
-  const orderedAtVal = toDateValue(r.orderedAt)
-  const receivedAtVal = toDateValue(r.receivedAt)
   const items = Array.isArray(r.items) ? r.items : []
   const itemDetails = items
     .map((it) => `${it.quantity ?? ''} ${it.unit ?? ''} ${it.description ?? ''}`.trim())
     .filter(Boolean)
     .join('; ')
-  const purchaseStatus = r.purchaseStatus || (r.status === 'approved' ? 'pending' : '')
   return {
     'RF Control No.': r.rfControlNo || '',
     Date: dateIso,
@@ -93,14 +84,6 @@ function requisitionToCsvRow(r) {
     'Approved By (GM)': r.approvedBy?.name || '',
     'Rejected By': r.rejectedBy?.name || '',
     'Rejection Remarks': r.rejectedBy?.remarks || '',
-    'Purchase Status': purchaseStatus
-      ? String(purchaseStatus).charAt(0).toUpperCase() + String(purchaseStatus).slice(1)
-      : '',
-    'PO Number': r.poNumber || '',
-    'Ordered By': r.orderedBy?.name || '',
-    'Ordered At': orderedAtVal ? orderedAtVal.toISOString().slice(0, 10) : '',
-    'Received By': r.receivedBy?.name || '',
-    'Received At': receivedAtVal ? receivedAtVal.toISOString().slice(0, 10) : '',
     'Items Count': items.length,
     'Item Details': itemDetails,
   }
@@ -131,16 +114,12 @@ const overRetentionCount = computed(
 
 function getResolutionLabel(r) {
   if (r.status === 'rejected') return 'Rejected'
-  if (r.poStatus === 'rejected') return 'PO Rejected'
-  if (r.status === 'approved' && (r.purchaseStatus === 'received' || r.isArchived))
-    return 'Fulfilled'
   return statusLabel[r.status] || r.status
 }
 
 function getResolutionClass(r) {
-  if (r.status === 'rejected' || r.poStatus === 'rejected') return 'status-rejected'
-  if (r.status === 'approved' && (r.purchaseStatus === 'received' || r.isArchived))
-    return 'status-fulfilled'
+  if (r.status === 'rejected') return 'status-rejected'
+  if (r.status === 'approved') return 'status-fulfilled'
   return 'status-default'
 }
 
@@ -491,18 +470,14 @@ onUnmounted(() => {
                 :title="
                   r.status === 'rejected'
                     ? r.rejectedBy?.remarks
-                    : r.poNumber
-                      ? 'PO: ' + r.poNumber
-                      : ''
+                    : ''
                 "
               >
                 <div class="outcome-text">
                   {{
                     r.status === 'rejected'
                       ? r.rejectedBy?.remarks || 'Rejected during workflow.'
-                      : r.poNumber
-                        ? 'PO: ' + r.poNumber
-                        : 'Completed Delivery'
+                      : 'Approved'
                   }}
                 </div>
               </td>

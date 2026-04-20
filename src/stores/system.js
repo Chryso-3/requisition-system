@@ -11,6 +11,7 @@ export const useSystemStore = defineStore('system', () => {
       text: '',
       type: 'info',
     },
+    googleSignInEnabled: true,
   })
   const loading = ref(false)
   const initialized = ref(false)

@@ -217,7 +217,8 @@ function updateData() {
     return {
       monthLabel: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
       total: b.count || 0,
-      value: b.value || 0,
+      approved: b.approved || 0,
+      rejected: b.rejected || 0,
     }
   })
 
@@ -589,16 +590,31 @@ function renderCharts() {
     const volumeGradient = trendCtx.createLinearGradient(0, 0, 0, 300)
     volumeGradient.addColorStop(0, 'rgba(99, 102, 241, 0.18)')
     volumeGradient.addColorStop(1, 'rgba(99, 102, 241, 0)')
-    const burnGradient = trendCtx.createLinearGradient(0, 0, 0, 300)
-    burnGradient.addColorStop(0, 'rgba(20, 184, 166, 0.15)')
-    burnGradient.addColorStop(1, 'rgba(20, 184, 166, 0)')
+
+    const barGradient = trendCtx.createLinearGradient(0, 0, 0, 300)
+    barGradient.addColorStop(0, 'rgba(16, 185, 129, 0.7)') // Top is rich Emerald
+    barGradient.addColorStop(1, 'rgba(16, 185, 129, 0.05)') // Bottom fades out cleanly
+
     chartTrend = new Chart(trendEl, {
-      type: 'line',
+      type: 'bar',
       data: {
         labels: trend.map((t) => t.monthLabel),
         datasets: [
           {
-            label: 'Volume (Requests)',
+            type: 'bar',
+            label: '', // Hidden from legend to avoid redundancy
+            data: trend.map((t) => t.total),
+            backgroundColor: barGradient,
+            hoverBackgroundColor: 'rgba(16, 185, 129, 0.9)',
+            borderColor: '#10b981',
+            borderWidth: { top: 2, right: 0, bottom: 0, left: 0 }, // Glowing top edge
+            borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 },
+            borderSkipped: 'bottom',
+            maxBarThickness: 24, // Noticeable but not bulky
+          },
+          {
+            type: 'line',
+            label: 'Volume', // Clean singular label for the hybrid view
             data: trend.map((t) => t.total),
             borderColor: '#6366f1',
             borderWidth: 2.5,
@@ -618,24 +634,16 @@ function renderCharts() {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        layout: { padding: { top: 8, right: 16, left: 0, bottom: 5 } },
+        layout: { padding: { top: 0, right: 16, left: 0, bottom: 5 } },
         plugins: {
           legend: {
-            display: true,
-            position: 'top',
-            align: 'end',
-            labels: {
-              usePointStyle: true,
-              pointStyle: 'circle',
-              boxWidth: 8,
-              boxHeight: 8,
-              font: { size: 12, family: defaultFont, weight: '500' },
-              color: '#64748b',
-              padding: 20,
-            },
+            display: false, // Completely removed as requested
           },
           tooltip: {
             ...premiumTooltip,
+            filter: function (tooltipItem) {
+              return tooltipItem.datasetIndex === 1 // Only show the Line dataset inside tooltips
+            },
             callbacks: {
               label: (ctx) => `  Volume : ${ctx.parsed.y}`,
             },
@@ -1053,7 +1061,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="glass-card animate-fade-in lg:col-span-2" style="animation-delay: 600ms">
+            <div class="glass-card animate-fade-in md:col-span-2 lg:col-span-2 xl:col-span-2" style="grid-column: 1 / -1; width: 100%; padding-left: 2rem; padding-right: 2rem; animation-delay: 600ms;">
               <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-5">
                 <div>
                   <h3
@@ -1065,7 +1073,6 @@ onUnmounted(() => {
                     Trajectory of monthly requisition activity (Volume)
                   </p>
                 </div>
-                <!-- Indicators on the right -->
               </div>
               <div class="h-[300px]">
                 <canvas id="chart-trend"></canvas>

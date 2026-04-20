@@ -101,6 +101,7 @@ export async function getSystemConfig() {
       text: '',
       type: 'info', // info, warning, success
     },
+    googleSignInEnabled: true,
   }
 }
 

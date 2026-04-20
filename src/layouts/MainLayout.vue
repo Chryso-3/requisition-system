@@ -323,23 +323,6 @@ watch(
             <span>User Management</span>
           </router-link>
 
-          <router-link to="/admin/control-numbers" class="nav-item" active-class="active">
-            <span class="nav-icon">
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <rect x="3" y="4" width="18" height="16" rx="2" stroke="#FBBF24" stroke-width="2" />
-                <path d="M7 8H17" stroke="#FBBF24" stroke-width="2" stroke-linecap="round" />
-                <path d="M7 12H17" stroke="#FBBF24" stroke-width="2" stroke-linecap="round" />
-                <path d="M7 16H13" stroke="#FBBF24" stroke-width="2" stroke-linecap="round" />
-              </svg>
-            </span>
-            <span>Control Numbers</span>
-          </router-link>
 
           <router-link to="/admin/requisitions" class="nav-item" active-class="active">
             <span class="nav-icon">

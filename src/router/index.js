@@ -145,12 +145,6 @@ const router = createRouter({
           meta: { roles: [USER_ROLES.SUPER_ADMIN] },
         },
         {
-          path: 'admin/control-numbers',
-          name: 'admin-control-numbers',
-          component: () => import('@/views/admin/AdminControlNumbersView.vue'),
-          meta: { roles: [USER_ROLES.SUPER_ADMIN] },
-        },
-        {
           path: 'admin/requisitions',
           name: 'admin-requisitions',
           component: () => import('@/views/admin/AdminRequisitionsView.vue'),

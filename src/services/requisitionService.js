@@ -2238,17 +2238,18 @@ export async function migrateLegacyArchivedRecords() {
   console.log('[Migration] Starting Archive Repair...')
   const base = collection(db, COLLECTIONS.REQUISITIONS)
 
-  // 1. Find records that SHOULD be archived but aren't
-  console.log('[Migration] Fetching records to archive...')
-  const toArchiveSnaps = await Promise.all([
-    getDocs(query(base, where('status', '==', REQUISITION_STATUS.REJECTED))),
-    getDocs(query(base, where('status', '==', REQUISITION_STATUS.RECEIVED))),
-  ]).catch((err) => {
-    console.error('[Migration] Error fetching toArchiveSnaps:', err)
+  // 1. Find REJECTED records that are missing the isArchived flag.
+  // NOTE: REQUISITION_STATUS.RECEIVED was removed from this system in a prior refactor;
+  //       referencing it caused where() to receive `undefined`, crashing Firestore.
+  console.log('[Migration] Fetching unarchived rejected records...')
+  const toArchiveSnap = await getDocs(
+    query(base, where('status', '==', REQUISITION_STATUS.REJECTED)),
+  ).catch((err) => {
+    console.error('[Migration] Error fetching toArchiveSnap:', err)
     throw err
   })
 
-  // 2. Find records that SHOULD NOT be archived but are (the current bug fix)
+  // 2. Find APPROVED records that were incorrectly flagged as archived (legacy bug)
   console.log('[Migration] Fetching prematurely archived records...')
   const prematurelyArchivedSnap = await getDocs(
     query(
@@ -2256,7 +2257,7 @@ export async function migrateLegacyArchivedRecords() {
       where('status', '==', REQUISITION_STATUS.APPROVED),
       where('isArchived', '==', true),
     ),
-  ).catch(err => {
+  ).catch((err) => {
     console.error('[Migration] Error fetching prematurelyArchivedSnap:', err)
     throw err
   })
@@ -2265,26 +2266,22 @@ export async function migrateLegacyArchivedRecords() {
   const batch = writeBatch(db)
   let count = 0
 
-  // Handle Missing Archive Flags
-  toArchiveSnaps.forEach((snap) => {
-    snap.docs.forEach((d) => {
-      const data = d.data()
-      if (data.isArchived === undefined || data.isArchived === false) {
-        batch.update(d.ref, {
-          isArchived: true,
-          archivedAt:
-            data.archivedAt ?? data.receivedAt ?? data.rejectedBy?.signedAt ?? serverTimestamp(),
-        })
-        count++
-      }
-    })
+  // Flag rejected records that are missing isArchived
+  toArchiveSnap.docs.forEach((d) => {
+    const data = d.data()
+    if (data.isArchived === undefined || data.isArchived === false) {
+      batch.update(d.ref, {
+        isArchived: true,
+        archivedAt: data.archivedAt ?? data.rejectedBy?.signedAt ?? serverTimestamp(),
+      })
+      count++
+    }
   })
 
-  // Handle Premature Archive Flags (Fix for the reported bug)
+  // Un-archive APPROVED records that should not be archived
   prematurelyArchivedSnap.docs.forEach((d) => {
     const data = d.data()
-    // Focus on received status
-    if (data.status !== REQUISITION_STATUS.RECEIVED && data.status !== REQUISITION_STATUS.REJECTED) {
+    if (data.status === REQUISITION_STATUS.APPROVED) {
       batch.update(d.ref, {
         isArchived: false,
         archivedAt: null,

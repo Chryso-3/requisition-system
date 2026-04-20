@@ -18,7 +18,7 @@ async function sendEmailRelay({ to, subject, htmlBody, body }) {
     console.log(`[Notification] Pinging relay for: ${to} | Subject: ${subject}`)
     // We send as a pure string because 'no-cors' forces headers to be simple.
     // This ensures Google's doPost(e) always sees the data in e.postData.contents.
-    const response = await fetch(RELAY_URL, {
+    await fetch(RELAY_URL, {
       method: 'POST',
       mode: 'no-cors',
       body: JSON.stringify({

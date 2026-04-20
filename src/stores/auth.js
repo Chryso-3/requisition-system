@@ -8,7 +8,7 @@ import {
   updateProfile,
   signInWithPopup,
 } from 'firebase/auth'
-import { doc, setDoc, disableNetwork, enableNetwork } from 'firebase/firestore'
+import { doc, setDoc } from 'firebase/firestore'
 import { auth, db, googleProvider } from '@/firebase'
 import { unsubscribeAllSubscriptions } from '@/services/requisitionService'
 import { COLLECTIONS, USER_ROLES } from '@/firebase/collections'
@@ -140,7 +140,7 @@ export const useAuthStore = defineStore('auth', () => {
       // unsubscribe live listeners first to avoid any polling callbacks
       unsubscribeAllSubscriptions()
       await firebaseSignOut(auth)
-    } catch (e) {
+    } catch {
       // ignore signOut network errors
     }
     user.value = null

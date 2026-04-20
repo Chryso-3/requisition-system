@@ -1,22 +1,21 @@
 import {
-  collection,
-  doc,
-  addDoc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  query,
-  where,
-  orderBy,
+  writeBatch,
+  serverTimestamp,
+  runTransaction,
+  onSnapshot,
   limit,
   startAfter,
-  onSnapshot,
-  runTransaction,
-  serverTimestamp,
-  writeBatch,
-  increment,
+  orderBy,
+  where,
+  query,
+  deleteDoc,
+  updateDoc,
+  setDoc,
+  getDocs,
+  getDoc,
+  addDoc,
+  doc,
+  collection,
   getCountFromServer,
 } from 'firebase/firestore'
 import { db } from '../firebase'
@@ -64,10 +63,7 @@ export function normalizeDepartmentSync(val, departments = []) {
   return t
 }
 
-async function normalizeDepartment(val) {
-  const departments = await getDepartments()
-  return normalizeDepartmentSync(val, departments)
-}
+
 
 /**
  * Resilient subscription helper: tries onSnapshot and falls back to polling when Listen fails.
@@ -123,14 +119,14 @@ function subscribeWithFallback(refOrQuery, isQuery, onData, onError, opts = {}) 
       if (pollTimer) clearInterval(pollTimer)
       try {
         unsub()
-      } catch (_) {}
+      } catch {}
       try {
         activeUnsubscribers.delete(wrapped)
-      } catch (_) {}
+      } catch {}
     }
     try {
       activeUnsubscribers.add(wrapped)
-    } catch (_) {}
+    } catch {}
     return wrapped
   } catch (e) {
     if (onError) onError(e)
@@ -141,11 +137,11 @@ function subscribeWithFallback(refOrQuery, isQuery, onData, onError, opts = {}) 
       if (pollTimer) clearInterval(pollTimer)
       try {
         activeUnsubscribers.delete(wrappedPollOnly)
-      } catch (_) {}
+      } catch {}
     }
     try {
       activeUnsubscribers.add(wrappedPollOnly)
-    } catch (_) {}
+    } catch {}
     return wrappedPollOnly
   }
 }
@@ -158,7 +154,7 @@ export function unsubscribeAllSubscriptions() {
   for (const u of Array.from(activeUnsubscribers)) {
     try {
       u()
-    } catch (_) {}
+    } catch {}
   }
   activeUnsubscribers.clear()
 }
@@ -245,7 +241,6 @@ export async function seedAnalyticsSummary() {
     byDepartment: {},
     byMonth: {},
     totalApprovedValue: 0,
-    totalApprovedValue: 0,
     departmentalSpend: {},
     durations: {},
     summary: {
@@ -265,6 +260,25 @@ export async function seedAnalyticsSummary() {
   let leadTimeCount = 0
   let totalApprovedCount = 0
   let totalRejectedCount = 0
+
+  // Helper: always returns a fully-structured month object (durations always present)
+  function getOrCreateMonth(key) {
+    if (!summary.byMonth[key]) {
+      summary.byMonth[key] = {
+        count: 0,
+        value: 0,
+        approved: 0,
+        rejected: 0,
+        leadTimeMs: 0,
+        leadTimeCount: 0,
+        byStatus: {},
+        byDepartment: {},
+        durations: {},
+        departmentalSpend: {},
+      }
+    }
+    return summary.byMonth[key]
+  }
 
   docs.forEach((r) => {
     // Status counts
@@ -287,23 +301,10 @@ export async function seedAnalyticsSummary() {
         : null
 
     if (monthKey) {
-      if (!summary.byMonth[monthKey]) {
-        summary.byMonth[monthKey] = {
-          count: 0,
-          value: 0,
-          approved: 0,
-          rejected: 0,
-          leadTimeMs: 0,
-          leadTimeCount: 0,
-          byStatus: {},
-          byDepartment: {},
-          departmentalSpend: {},
-        }
-      }
-      summary.byMonth[monthKey].count++
-      summary.byMonth[monthKey].byStatus[s] = (summary.byMonth[monthKey].byStatus[s] || 0) + 1
-      summary.byMonth[monthKey].byDepartment[dept] =
-        (summary.byMonth[monthKey].byDepartment[dept] || 0) + 1
+      const monthEntry = getOrCreateMonth(monthKey)
+      monthEntry.count++
+      monthEntry.byStatus[s] = (monthEntry.byStatus[s] || 0) + 1
+      monthEntry.byDepartment[dept] = (monthEntry.byDepartment[dept] || 0) + 1
     }
 
     const archDate = toDate(r.archivedAt || r.approvedAt)
@@ -323,23 +324,9 @@ export async function seedAnalyticsSummary() {
       summary.departmentalSpend[dept] = (summary.departmentalSpend[dept] || 0) + val
       // Burn (value) should be mapped to the ARCHIVE month (when it was approved/spent)
       if (archMonthKey) {
-        if (!summary.byMonth[archMonthKey]) {
-          summary.byMonth[archMonthKey] = {
-            count: 0,
-            value: 0,
-            approved: 0,
-            rejected: 0,
-            leadTimeMs: 0,
-            leadTimeCount: 0,
-            byStatus: {},
-            byDepartment: {},
-            durations: {},
-            departmentalSpend: {},
-          }
-        }
-        summary.byMonth[archMonthKey].value += val
-        summary.byMonth[archMonthKey].departmentalSpend[dept] =
-          (summary.byMonth[archMonthKey].departmentalSpend[dept] || 0) + val
+        const archEntry = getOrCreateMonth(archMonthKey)
+        archEntry.value += val
+        archEntry.departmentalSpend[dept] = (archEntry.departmentalSpend[dept] || 0) + val
       }
     }
 
@@ -348,37 +335,13 @@ export async function seedAnalyticsSummary() {
       totalApprovedCount++
       // Use archMonthKey for summary approved this month
       if (archMonthKey === thisMonthKey) summary.summary.approvedThisMonth++
-      if (archMonthKey) {
-        if (!summary.byMonth[archMonthKey]) {
-          summary.byMonth[archMonthKey] = {
-            count: 0,
-            value: 0,
-            approved: 0,
-            rejected: 0,
-            leadTimeMs: 0,
-            leadTimeCount: 0,
-          }
-        }
-        summary.byMonth[archMonthKey].approved++
-      }
+      if (archMonthKey) getOrCreateMonth(archMonthKey).approved++
 
     } else if (s === REQUISITION_STATUS.REJECTED) {
       totalRejectedCount++
       // Use archMonthKey for summary rejected this month
       if (archMonthKey === thisMonthKey) summary.summary.rejectedThisMonth++
-      if (archMonthKey) {
-        if (!summary.byMonth[archMonthKey]) {
-          summary.byMonth[archMonthKey] = {
-            count: 0,
-            value: 0,
-            approved: 0,
-            rejected: 0,
-            leadTimeMs: 0,
-            leadTimeCount: 0,
-          }
-        }
-        summary.byMonth[archMonthKey].rejected++
-      }
+      if (archMonthKey) getOrCreateMonth(archMonthKey).rejected++
     } else if (s !== REQUISITION_STATUS.DRAFT) {
       summary.summary.pendingApproval++
     }
@@ -399,18 +362,9 @@ export async function seedAnalyticsSummary() {
         totalLeadTimeMs += diff
         leadTimeCount++
         if (archMonthKey) {
-          if (!summary.byMonth[archMonthKey]) {
-            summary.byMonth[archMonthKey] = {
-              count: 0,
-              value: 0,
-              approved: 0,
-              rejected: 0,
-              leadTimeMs: 0,
-              leadTimeCount: 0,
-            }
-          }
-          summary.byMonth[archMonthKey].leadTimeMs += diff
-          summary.byMonth[archMonthKey].leadTimeCount++
+          const archEntry = getOrCreateMonth(archMonthKey)
+          archEntry.leadTimeMs += diff
+          archEntry.leadTimeCount++
         }
       } else if (s !== REQUISITION_STATUS.DRAFT) {
         // Real-time aging for active items
@@ -418,8 +372,9 @@ export async function seedAnalyticsSummary() {
         totalLeadTimeMs += diff
         leadTimeCount++
         if (monthKey) {
-          summary.byMonth[monthKey].leadTimeMs += diff
-          summary.byMonth[monthKey].leadTimeCount++
+          const monthEntry = getOrCreateMonth(monthKey)
+          monthEntry.leadTimeMs += diff
+          monthEntry.leadTimeCount++
         }
       }
     }
@@ -977,7 +932,7 @@ export async function getAnalyticsData() {
     return Number.isNaN(d.getTime()) ? null : d
   }
 
-  const [{ requisitions: allReqs }, pendingList, approvedList, rejectedList] = await Promise.all([
+  const [{ requisitions: allReqs }, , approvedList, rejectedList] = await Promise.all([
     listRequisitions({}, { pageSize: REQUISITION_LIST_LIMIT }),
     listRequisitionsSimple({ status: REQUISITION_STATUS.PENDING_APPROVAL }),
     listRequisitionsSimple({ status: REQUISITION_STATUS.APPROVED }),
@@ -1229,7 +1184,7 @@ export async function computeAnalyticsFromLists(
     const t3 = toDate(r.budgetApproved?.signedAt)
     const t4 = toDate(r.checkedBy?.signedAt)
     const t5 = toDate(r.approvedBy?.signedAt)
-    const t6 = toDate(r.archivedAt)
+
 
     if (t0 && t1) {
       stageVelocity.submission_to_recommend.total += Math.max(0, t1 - t0)
@@ -1374,99 +1329,76 @@ export async function submitRequisition(id, updates = {}) {
     ...updates,
   })
 
-  // 1. Log the submission in Transaction Log
+  // Single audit log write — use data from `updates` (already available, no extra read needed)
   try {
-    const req = await getRequisition(id)
-    if (req) {
-      await appendTransactionLog(
-        id,
-        {
-          action: 'submitted',
-          userId: req.requestedBy?.userId || '',
-          name: req.requestedBy?.name || 'Requestor',
-          title: 'Requestor',
-          email: req.requestedBy?.email || '',
-          step: 'submission',
-          remarks: 'Submitted for approval',
-        },
-        {
-          statusBefore: 'DRAFT',
-          statusAfter: REQUISITION_STATUS.PENDING_RECOMMENDATION,
-          rfControlNo: req.rfControlNo,
-          purpose: (req.purpose || '').slice(0, 200),
-        },
-      )
-    }
+    await appendTransactionLog(
+      id,
+      {
+        action: 'submitted',
+        userId: updates.requestedBy?.userId ?? '',
+        name: updates.requestedBy?.name ?? 'Requestor',
+        title: 'Requestor',
+        email: updates.requestedBy?.email ?? '',
+        step: 'submission',
+        remarks: 'Submitted for approval',
+      },
+      {
+        statusBefore: REQUISITION_STATUS.DRAFT,
+        statusAfter: REQUISITION_STATUS.PENDING_RECOMMENDATION,
+        rfControlNo: res?.rfControlNo ?? '',
+        purpose: (res?.purpose ?? '').slice(0, 200),
+      },
+    )
   } catch (err) {
     console.warn('[submitRequisition] Failed to log transaction:', err)
   }
 
-  // Notification: Notify Assigned Approver and Requestor (Receipt)
-  try {
-    let req = await getRequisition(id)
-    req = await ensureRequestorEmail(req)
+  // Notifications — fire-and-forget: spinner clears immediately after the write above
+  ;(async () => {
+    try {
+      let req = await getRequisition(id)
+      req = await ensureRequestorEmail(req)
 
-    // 1. Receipt to Requestor
-    await notificationService.notifySubmissionReceipt(req)
+      // Receipt to Requestor
+      await notificationService.notifySubmissionReceipt(req)
 
-    // 2. Alert to Assigned Approver
-    if (req.assignedApproverId) {
-      // Fetch specific approver email
-      const userRef = doc(db, COLLECTIONS.USERS, req.assignedApproverId)
-      const userSnap = await getDoc(userRef)
-      if (userSnap.exists()) {
-        const userData = userSnap.data()
-        if (userData.email && userData.isActive !== false) {
-          await notificationService.notifyNextApprover(
-            req,
-            userData.role || 'Manager',
-            userData.email,
-          )
+      // Alert to Assigned Approver
+      if (req.assignedApproverId) {
+        const userRef = doc(db, COLLECTIONS.USERS, req.assignedApproverId)
+        const userSnap = await getDoc(userRef)
+        if (userSnap.exists()) {
+          const userData = userSnap.data()
+          if (userData.email && userData.isActive !== false) {
+            await notificationService.notifyNextApprover(
+              req,
+              userData.role || 'Manager',
+              userData.email,
+            )
+          }
+        }
+      } else {
+        // Legacy Fallback: Notify all Managers of the same department
+        const managerRoles = [
+          USER_ROLES.SECTION_HEAD,
+          USER_ROLES.DIVISION_HEAD,
+          USER_ROLES.DEPARTMENT_HEAD,
+        ]
+        const managers = await getEmailsByRoles(managerRoles)
+        const targetEmails = managers
+          .filter((m) => {
+            if (!m.department || !req.department) return false
+            return m.department.trim().toUpperCase() === req.department.trim().toUpperCase()
+          })
+          .map((m) => m.email)
+          .filter((e) => !!e)
+        if (targetEmails.length > 0) {
+          await notificationService.notifyNextApprover(req, 'Manager', targetEmails)
         }
       }
-    } else {
-      // Legacy Fallback: Notify all Managers of the same department
-      const managerRoles = [
-        USER_ROLES.SECTION_HEAD,
-        USER_ROLES.DIVISION_HEAD,
-        USER_ROLES.DEPARTMENT_HEAD,
-      ]
-      const managers = await getEmailsByRoles(managerRoles)
-
-      const targetEmails = managers
-        .filter((m) => {
-          if (!m.department || !req.department) return false
-          return m.department.trim().toUpperCase() === req.department.trim().toUpperCase()
-        })
-        .map((m) => m.email)
-        .filter((e) => !!e)
-
-      if (targetEmails.length > 0) {
-        await notificationService.notifyNextApprover(req, 'Manager', targetEmails)
-      }
+    } catch (e) {
+      console.warn('[submitRequisition] Background notification error:', e)
     }
-  } catch (e) {
-    console.error('Submission notification error:', e)
-  }
-
-  // Audit Log Entry for Submission
-  await appendTransactionLog(
-    id,
-    {
-      action: 'submitted',
-      userId: updates.requestedBy?.userId ?? '',
-      name: updates.requestedBy?.name ?? 'Requestor',
-      title: 'Requestor',
-      email: updates.requestedBy?.email ?? '',
-      step: 'submission',
-    },
-    {
-      statusBefore: REQUISITION_STATUS.DRAFT,
-      statusAfter: REQUISITION_STATUS.PENDING_RECOMMENDATION,
-      rfControlNo: (await getRequisition(id))?.rfControlNo ?? '',
-      purpose: ((await getRequisition(id))?.purpose ?? '').slice(0, 200),
-    },
-  )
+  })()
 
   return res
 }
@@ -1536,15 +1468,7 @@ async function appendTransactionLog(requisitionId, entry, snapshot = {}) {
  * Append Internal Auditor log entry on the requisition doc only (for detail view section).
  * Transaction log is written by approveRequisition/declineRequisition for all roles.
  */
-async function appendInternalAuditorLog(id, entry, snapshot = {}) {
-  const current = await getRequisition(id)
-  const log = Array.isArray(current?.internalAuditorLog) ? current.internalAuditorLog : []
-  const signedAt = new Date().toISOString()
-  const fullEntry = { ...entry, ...snapshot, signedAt }
-  await updateRequisition(id, {
-    internalAuditorLog: [...log, fullEntry],
-  })
-}
+
 
 /** Max transaction log entries to load on Logs page */
 export const AUDIT_LOG_LIMIT = 500
@@ -1653,7 +1577,7 @@ export async function approveRequisition(id, approver, role) {
 
   const current = await getRequisition(id)
 
-  // First-to-Action Validation: Check if the requisition was already approved by a colleague
+  // First-to-Action Validation: Check if already approved by a colleague
   if (current.status !== workflow.canApproveStatus) {
     throw new Error(
       `This requisition is no longer pending your approval. It is currently at: ${current.status}. It may have already been processed by a colleague.`,
@@ -1674,16 +1598,9 @@ export async function approveRequisition(id, approver, role) {
     updateData.archivedAt = serverTimestamp()
   }
 
-  // For the internal auditor: append log entry in the SAME write as the status change.
-  // This avoids a second write after the status has already moved to pending_approval,
-  // which would be rejected by Firestore rules.
+  // For the internal auditor: append log entry in the SAME write as the status change
+  // to avoid a second write after status has moved (would be denied by Firestore rules).
   if (role === 'internal_auditor') {
-    const snapshot = {
-      statusBefore: current?.status ?? '',
-      statusAfter: workflow.nextStatus,
-      rfControlNo: current?.rfControlNo ?? '',
-      purpose: (current?.purpose ?? '').slice(0, 200),
-    }
     const log = Array.isArray(current?.internalAuditorLog) ? current.internalAuditorLog : []
     updateData.internalAuditorLog = [
       ...log,
@@ -1693,68 +1610,73 @@ export async function approveRequisition(id, approver, role) {
         name: approver.name,
         title: workflow.title,
         email: approver.email ?? '',
-        ...snapshot,
+        statusBefore: current?.status ?? '',
+        statusAfter: workflow.nextStatus,
+        rfControlNo: current?.rfControlNo ?? '',
+        purpose: (current?.purpose ?? '').slice(0, 200),
         signedAt,
       },
     ]
   }
 
-  await updateRequisition(id, updateData)
-
-  // Save signature separately (base64) so requisition doc stays small.
-  if (approver?.signatureData) {
-    await upsertRequisitionSignature(id, workflow.field, {
-      userId: approver.userId,
-      name: approver.name,
-      title: workflow.title,
-      signedAt,
-      signatureData: approver.signatureData,
-    })
-  }
-
-  const snapshot = {
+  // --- CRITICAL PATH: only these two writes block the spinner ---
+  const logSnapshot = {
     statusBefore: current?.status ?? '',
     statusAfter: workflow.nextStatus,
     rfControlNo: current?.rfControlNo ?? '',
     purpose: (current?.purpose ?? '').slice(0, 200),
   }
-  await appendTransactionLog(
-    id,
-    {
-      action: 'approved',
-      userId: approver.userId,
-      name: approver.name,
-      title: workflow.title,
-      email: approver.email ?? '',
-      step: role,
-    },
-    snapshot,
-  )
 
-  // Notifications logic
-  try {
-    const reqWithEmail = await ensureRequestorEmail(current)
-    const nextWorkflow = Object.entries(APPROVAL_WORKFLOW).find(
-      ([, w]) => w.canApproveStatus === workflow.nextStatus,
-    )
+  // Phase 4: run the status update first, then parallelize signature + audit log
+  await updateRequisition(id, updateData)
 
-    if (nextWorkflow) {
-      const [nextRole] = nextWorkflow
-      const nextEmails = await getEmailsByRole(nextRole)
-      if (nextEmails.length > 0) {
-        await notificationService.notifyNextApprover(reqWithEmail, nextRole, nextEmails)
+  await Promise.all([
+    // Save signature separately (base64) so requisition doc stays small
+    approver?.signatureData
+      ? upsertRequisitionSignature(id, workflow.field, {
+          userId: approver.userId,
+          name: approver.name,
+          title: workflow.title,
+          signedAt,
+          signatureData: approver.signatureData,
+        })
+      : Promise.resolve(),
+    appendTransactionLog(
+      id,
+      {
+        action: 'approved',
+        userId: approver.userId,
+        name: approver.name,
+        title: workflow.title,
+        email: approver.email ?? '',
+        step: role,
+      },
+      logSnapshot,
+    ),
+  ])
+  // --- END CRITICAL PATH ---
+
+  // Phase 1: Notifications fire in the background — spinner is already cleared by this point
+  ;(async () => {
+    try {
+      const reqWithEmail = await ensureRequestorEmail(current)
+      const nextWorkflow = Object.entries(APPROVAL_WORKFLOW).find(
+        ([, w]) => w.canApproveStatus === workflow.nextStatus,
+      )
+      if (nextWorkflow) {
+        const [nextRole] = nextWorkflow
+        const nextEmails = await getEmailsByRole(nextRole)
+        if (nextEmails.length > 0) {
+          await notificationService.notifyNextApprover(reqWithEmail, nextRole, nextEmails)
+        }
+        await notificationService.notifyRequestorUpdate(reqWithEmail, 'Step Approved', '', nextRole)
+      } else if (workflow.nextStatus === REQUISITION_STATUS.APPROVED) {
+        await notificationService.notifyRequestorUpdate(reqWithEmail, 'approved', '', 'Approved')
       }
-      // Step-by-Step Notification: Inform requestor it moved to the next role
-      await notificationService.notifyRequestorUpdate(reqWithEmail, 'Step Approved', '', nextRole)
-    } else if (workflow.nextStatus === REQUISITION_STATUS.APPROVED) {
-      // Final Approval: Inform requestor
-      await notificationService.notifyRequestorUpdate(reqWithEmail, 'approved', '', 'Approved')
+    } catch (e) {
+      console.warn('[approveRequisition] Background notification error:', e)
     }
-  } catch (e) {
-    console.error('Approval notification error:', e)
-  }
-
-  return getRequisition(id)
+  })()
 }
 
 /**
@@ -1780,15 +1702,9 @@ export async function declineRequisition(id, approver, remarks, role) {
     },
   }
 
-  // For the internal auditor: merge log update into the SAME write as the status change.
-  // A second write after status is 'rejected' would be denied by Firestore rules.
+  // For the internal auditor: merge log update into the SAME write as the status change
+  // to avoid a second write after status is 'rejected' (would be denied by Firestore rules).
   if (role === 'internal_auditor') {
-    const snapshot = {
-      statusBefore: current?.status ?? '',
-      statusAfter: REQUISITION_STATUS.REJECTED,
-      rfControlNo: current?.rfControlNo ?? '',
-      purpose: (current?.purpose ?? '').slice(0, 200),
-    }
     const log = Array.isArray(current?.internalAuditorLog) ? current.internalAuditorLog : []
     updateData.internalAuditorLog = [
       ...log,
@@ -1799,20 +1715,18 @@ export async function declineRequisition(id, approver, remarks, role) {
         title: title,
         email: approver.email ?? '',
         remarks: remarks || '',
-        ...snapshot,
+        statusBefore: current?.status ?? '',
+        statusAfter: REQUISITION_STATUS.REJECTED,
+        rfControlNo: current?.rfControlNo ?? '',
+        purpose: (current?.purpose ?? '').slice(0, 200),
         signedAt,
       },
     ]
   }
 
+  // --- CRITICAL PATH: only these two writes block the spinner ---
   await updateRequisition(id, updateData)
 
-  const snapshot = {
-    statusBefore: current?.status ?? '',
-    statusAfter: REQUISITION_STATUS.REJECTED,
-    rfControlNo: current?.rfControlNo ?? '',
-    purpose: (current?.purpose ?? '').slice(0, 200),
-  }
   await appendTransactionLog(
     id,
     {
@@ -1824,19 +1738,24 @@ export async function declineRequisition(id, approver, remarks, role) {
       remarks: remarks || '',
       step: role,
     },
-    snapshot,
+    {
+      statusBefore: current?.status ?? '',
+      statusAfter: REQUISITION_STATUS.REJECTED,
+      rfControlNo: current?.rfControlNo ?? '',
+      purpose: (current?.purpose ?? '').slice(0, 200),
+    },
   )
+  // --- END CRITICAL PATH ---
 
-  // Notification: Notify Requestor of Rejection
-  try {
-    console.log('[RequisitionService] Attempting to notify requestor of rejection:', id)
-    const reqWithEmail = await ensureRequestorEmail(current)
-    await notificationService.notifyRequestorUpdate(reqWithEmail, 'rejected', remarks)
-  } catch (e) {
-    console.error('Rejection notification error:', e)
-  }
-
-  return getRequisition(id)
+  // Phase 1: Notification fires in the background — spinner clears before this runs
+  ;(async () => {
+    try {
+      const reqWithEmail = await ensureRequestorEmail(current)
+      await notificationService.notifyRequestorUpdate(reqWithEmail, 'rejected', remarks)
+    } catch (e) {
+      console.warn('[declineRequisition] Background notification error:', e)
+    }
+  })()
 }
 
 /**
@@ -2416,7 +2335,7 @@ export async function clearAllTestingData(userProfile) {
   }
 
   // Reset basic counters
-  const currentYear = new Date().getFullYear()
+
   const countersToReset = ['requisitionRf']
 
   for (const cId of countersToReset) {

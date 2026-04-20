@@ -22,7 +22,7 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp()
 let dbInstance
 try {
   dbInstance = getFirestore(app)
-} catch (e) {
+} catch {
   // If not initialized, do it once with custom settings
   dbInstance = initializeFirestore(app, {
     localCache: persistentLocalCache(),

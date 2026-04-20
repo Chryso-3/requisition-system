@@ -240,8 +240,6 @@ export async function seedAnalyticsSummary() {
     byStatus: {},
     byDepartment: {},
     byMonth: {},
-    totalApprovedValue: 0,
-    departmentalSpend: {},
     durations: {},
     summary: {
       pendingApproval: 0,
@@ -250,8 +248,6 @@ export async function seedAnalyticsSummary() {
       approvedPct: 0,
       rejectedPct: 0,
       avgLeadTimeDays: '—',
-      totalApprovedValue: 0,
-      avgOrderValue: 0,
     },
     lastUpdated: serverTimestamp(),
   }
@@ -266,7 +262,6 @@ export async function seedAnalyticsSummary() {
     if (!summary.byMonth[key]) {
       summary.byMonth[key] = {
         count: 0,
-        value: 0,
         approved: 0,
         rejected: 0,
         leadTimeMs: 0,
@@ -274,7 +269,6 @@ export async function seedAnalyticsSummary() {
         byStatus: {},
         byDepartment: {},
         durations: {},
-        departmentalSpend: {},
       }
     }
     return summary.byMonth[key]
@@ -312,23 +306,6 @@ export async function seedAnalyticsSummary() {
       archDate && !Number.isNaN(archDate.getTime())
         ? `${archDate.getFullYear()}-${String(archDate.getMonth() + 1).padStart(2, '0')}`
         : null
-
-    // Financials & Purchase
-    const isRel = s === REQUISITION_STATUS.APPROVED
-    if (isRel) {
-      const val = (r.items || []).reduce(
-        (sum, i) => sum + (parseFloat(i.quantity) || 0) * (parseFloat(i.unitPrice) || 0),
-        0,
-      )
-      summary.totalApprovedValue += val
-      summary.departmentalSpend[dept] = (summary.departmentalSpend[dept] || 0) + val
-      // Burn (value) should be mapped to the ARCHIVE month (when it was approved/spent)
-      if (archMonthKey) {
-        const archEntry = getOrCreateMonth(archMonthKey)
-        archEntry.value += val
-        archEntry.departmentalSpend[dept] = (archEntry.departmentalSpend[dept] || 0) + val
-      }
-    }
 
     // Global status buckets
     if (s === REQUISITION_STATUS.APPROVED) {
@@ -476,11 +453,8 @@ export async function seedAnalyticsSummary() {
     allDecisions > 0 ? Math.round((totalApprovedCount / allDecisions) * 100) : 0
   summary.summary.rejectedPct =
     allDecisions > 0 ? Math.round((totalRejectedCount / allDecisions) * 100) : 0
-  summary.summary.totalApprovedValue = summary.totalApprovedValue
   summary.summary.avgLeadTimeDays =
     leadTimeCount > 0 ? (totalLeadTimeMs / leadTimeCount / (1000 * 60 * 60 * 24)).toFixed(1) : '—'
-  summary.summary.avgOrderValue =
-    totalApprovedCount > 0 ? summary.totalApprovedValue / totalApprovedCount : 0
 
   const ref = doc(db, COLLECTIONS.ANALYTICS, ANALYTICS_SUMMARY_ID)
   await setDoc(ref, summary)

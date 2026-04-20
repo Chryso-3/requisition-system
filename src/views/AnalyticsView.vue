@@ -27,6 +27,12 @@ const dateRangeOptions = [
 ]
 
 const dateRangePreset = ref('all')
+
+// Dynamic label for KPI cards — changes with the date dropdown
+const selectedRangeLabel = computed(() => {
+  const found = dateRangeOptions.find((o) => o.value === dateRangePreset.value)
+  return found ? found.label : 'Selected period'
+})
 const summaryData = ref(null)
 const data = ref(null)
 const loading = ref(true)
@@ -39,7 +45,6 @@ let chartDepartment = null
 let chartApprovedRejected = null
 let chartTrend = null
 let chartBottlenecks = null
-let chartFinancials = null
 
 // These become simple lookups from the summary data
 const pendingReqsCount = computed(
@@ -133,18 +138,19 @@ function updateData() {
   })
 
   // ── 3. Fallback to global Firestore top-level fields when buckets are empty ─
-  // Monthly buckets only have sub-fields after running Sync with the new schema.
-  // Before that, the data lives at the top level of the analytics document.
-  const hasSubData = Object.values(agg.byStatus).some((v) => v > 0)
+  // Monthly buckets only exist after running Sync. Before that, data lives at the top level.
+  // FIX: Use agg.count (total submissions in range) instead of byStatus values —
+  //      byStatus can be empty even when submissions exist (e.g., only active drafts).
+  const hasSubData = agg.count > 0
   const byStatusSrc = hasSubData ? agg.byStatus : s.byStatus || {}
   const byDeptSrc = hasSubData ? agg.byDepartment : s.byDepartment || {}
   const deptSpendSrc = hasSubData ? agg.departmentalSpend : s.departmentalSpend || {}
 
-  const effApproved =
-    agg.approved > 0 ? agg.approved : s.byStatus?.[REQUISITION_STATUS.APPROVED] || 0
-  const effRejected =
-    agg.rejected > 0 ? agg.rejected : s.byStatus?.[REQUISITION_STATUS.REJECTED] || 0
-  const effValue = agg.value > 0 ? agg.value : s.totalApprovedValue || 0
+  // FIX: Do NOT fall back to global totals when the range has 0 approvals — that IS
+  //      the correct value. Global fallback was causing "This month" to show all-time totals.
+  const effApproved = agg.approved
+  const effRejected = agg.rejected
+  const effValue = agg.value
 
   const hasDurData = Object.values(agg.durations).some((d) => d.count > 0 || d.activeCount > 0)
   const durSrc = hasDurData
@@ -191,17 +197,23 @@ function updateData() {
     }))
     .sort((a, b) => b.count - a.count)
 
-  // Trend chart: ALWAYS show Jan-Dec of the current year for "Strategic" context
+  // Trend chart: ALWAYS shows Jan–Dec of the current year (fixed X-axis).
+  // Months outside the selected range are zeroed so the line changes with the filter
+  // while the axis labels stay constant — giving a full-year strategic view.
   const trendMonths = []
   for (let i = 0; i < 12; i++) {
     const d = new Date(now.getFullYear(), i, 1)
     trendMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
   }
+  // Build a Set of months that are within the selected range for fast lookup
+  const filteredMonthSet = new Set(filteredMonths)
 
   const monthlyTrend = trendMonths.map((key) => {
     const [y, m] = key.split('-')
     const d = new Date(parseInt(y), parseInt(m) - 1, 1)
-    const b = s.byMonth?.[key] || {}
+    // If preset is 'all', show all months; otherwise zero out months not in the range
+    const inRange = preset === 'all' || filteredMonthSet.has(key)
+    const b = inRange ? (s.byMonth?.[key] || {}) : {}
     return {
       monthLabel: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
       total: b.count || 0,
@@ -239,46 +251,33 @@ function updateData() {
     }
   })
 
-  const gApproved = s.byStatus?.[REQUISITION_STATUS.APPROVED] || 0
-  const gRejected = s.byStatus?.[REQUISITION_STATUS.REJECTED] || 0
-  const gTotal = gApproved + gRejected
+  const arTotal = effApproved + effRejected
 
   // ── 5. Set reactive data ──────────────────────────────────────────────────
   data.value = {
     summary: {
       pendingApproval: s.summary?.pendingApproval || 0,
-      approvedThisMonth: effApproved,
-      rejectedThisMonth: effRejected,
-      approvedPct:
-        effApproved + effRejected > 0
-          ? Math.round((effApproved / (effApproved + effRejected)) * 100)
-          : 0,
-      rejectedPct:
-        effApproved + effRejected > 0
-          ? Math.round((effRejected / (effApproved + effRejected)) * 100)
-          : 0,
+      // FIX: renamed from approvedThisMonth to approvedInRange to reflect the selected period
+      approvedInRange: effApproved,
+      rejectedInRange: effRejected,
+      approvedPct: arTotal > 0 ? Math.round((effApproved / arTotal) * 100) : 0,
+      rejectedPct: arTotal > 0 ? Math.round((effRejected / arTotal) * 100) : 0,
       avgLeadTimeDays:
         agg.leadTimeCount > 0
           ? (agg.leadTimeMs / agg.leadTimeCount / 86400000).toFixed(2)
           : s.summary?.avgLeadTimeDays || '—',
-      totalApprovedValue: effValue,
-      avgOrderValue: effApproved > 0 ? effValue / effApproved : 0,
     },
     pipelineWithPct,
     byDepartment,
     monthlyTrend,
+    // FIX: approvedVsRejected now uses date-scoped effApproved/effRejected instead of global
     approvedVsRejected: {
-      approved: gApproved,
-      rejected: gRejected,
-      approvedPct: gTotal > 0 ? Math.round((gApproved / gTotal) * 100) : 0,
-      rejectedPct: gTotal > 0 ? Math.round((gRejected / gTotal) * 100) : 0,
+      approved: effApproved,
+      rejected: effRejected,
+      approvedPct: arTotal > 0 ? Math.round((effApproved / arTotal) * 100) : 0,
+      rejectedPct: arTotal > 0 ? Math.round((effRejected / arTotal) * 100) : 0,
     },
     productivity: { bottlenecks },
-    financials: {
-      departmentalSpend: Object.entries(deptSpendSrc)
-        .map(([department, total]) => ({ department, total }))
-        .sort((a, b) => b.total - a.total),
-    },
   }
 }
 
@@ -338,10 +337,6 @@ function destroyCharts() {
   if (chartBottlenecks) {
     chartBottlenecks.destroy()
     chartBottlenecks = null
-  }
-  if (chartFinancials) {
-    chartFinancials.destroy()
-    chartFinancials = null
   }
 }
 
@@ -617,21 +612,6 @@ function renderCharts() {
             pointBorderWidth: 2,
             yAxisID: 'y',
           },
-          {
-            label: 'Financial Burn (₱)',
-            data: trend.map((t) => t.value),
-            borderColor: '#14b8a6',
-            borderWidth: 2.5,
-            backgroundColor: burnGradient,
-            fill: true,
-            tension: 0.45,
-            pointRadius: 4,
-            pointHoverRadius: 7,
-            pointBackgroundColor: '#14b8a6',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
-            yAxisID: 'y1',
-          },
         ],
       },
       options: {
@@ -657,11 +637,7 @@ function renderCharts() {
           tooltip: {
             ...premiumTooltip,
             callbacks: {
-              label: (ctx) => {
-                const val = ctx.parsed.y
-                if (ctx.datasetIndex === 0) return `  Volume : ${val}`
-                return `  Burn ($) : ${formatPeso(val)}`
-              },
+              label: (ctx) => `  Volume : ${ctx.parsed.y}`,
             },
           },
         },
@@ -676,17 +652,6 @@ function renderCharts() {
             beginAtZero: true,
             ticks: { stepSize: 5, font: { size: 11, family: defaultFont }, color: tickColor },
             grid: { color: gridColor, drawBorder: false, tickLength: 0 },
-            border: { display: false },
-          },
-          y1: {
-            position: 'right',
-            beginAtZero: true,
-            ticks: {
-              font: { size: 11, family: defaultFont },
-              color: tickColor,
-              callback: (v) => '₱' + (v >= 1000 ? v / 1000 + 'k' : v),
-            },
-            grid: { drawOnChartArea: false, drawBorder: false, tickLength: 0 },
             border: { display: false },
           },
         },
@@ -813,75 +778,21 @@ function renderCharts() {
     })
   }
 
-  const financialEl = document.getElementById('chart-financials')
-  if (financialEl && data.value.financials?.departmentalSpend?.length) {
-    const fs = data.value.financials.departmentalSpend
-    const finCtx = financialEl.getContext('2d')
-    const finGradient = finCtx.createLinearGradient(400, 0, 0, 0)
-    finGradient.addColorStop(0, '#14b8a6')
-    finGradient.addColorStop(1, '#14b8a6aa')
-    chartFinancials = new Chart(financialEl, {
-      type: 'bar',
-      data: {
-        labels: fs.map((f) => safeAbbreviate(f.department)),
-        datasets: [
-          {
-            label: 'Total Spend (₱)',
-            data: fs.map((f) => f.total),
-            backgroundColor: finGradient,
-            borderRadius: { topRight: 8, bottomRight: 8, topLeft: 0, bottomLeft: 0 },
-            barThickness: 22,
-          },
-        ],
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: { padding: { left: 0, right: 16, top: 4, bottom: 4 } },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            ...premiumTooltip,
-            callbacks: {
-              label: (ctx) => `  Spend: ${formatPeso(ctx.parsed.x)}`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            beginAtZero: true,
-            ticks: {
-              font: { size: 11, family: defaultFont },
-              color: tickColor,
-              callback: (v) => '₱' + (v >= 1000 ? v / 1000 + 'k' : v),
-            },
-            grid: { color: gridColor, drawBorder: false, tickLength: 0 },
-            border: { display: false },
-          },
-          y: {
-            ticks: { font: { size: 11, family: defaultFont }, color: tickColor, padding: 4 },
-            grid: { display: false, drawBorder: false },
-            border: { display: false },
-          },
-        },
-      },
-    })
-  }
+// Financial chart completely removed
 }
 
-watch(dateRangePreset, () => {
-  updateData()
-})
+// FIX: Merged two watchers into one to prevent double-render / chart flicker.
+// updateData() re-aggregates from summaryData, then renderCharts() re-draws.
+// deep: false is intentional — we only care about the top-level ref references changing.
 watch(
-  [data, dateRangePreset],
-  async () => {
-    if (data.value && !loading.value) {
-      await nextTick()
-      setTimeout(renderCharts, 80)
-    }
+  [summaryData, dateRangePreset],
+  async ([newSummary]) => {
+    if (!newSummary || loading.value) return
+    updateData()
+    await nextTick()
+    setTimeout(renderCharts, 80)
   },
-  { deep: true },
+  { deep: false },
 )
 
 // Watch both loading and isGM to start data sync
@@ -951,8 +862,8 @@ onUnmounted(() => {
         <div class="analytics-content">
           <!-- Key metrics -->
           <section class="section metrics-section">
-            <div class="metrics-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-              <!-- Pending -->
+            <div class="metrics-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <!-- Pending (always live / all-time count) -->
               <div
                 class="glass-card kpi-card p-4 animate-fade-in"
                 style="--card-theme-color: hsl(var(--primary)); animation-delay: 0ms"
@@ -967,15 +878,13 @@ onUnmounted(() => {
                   <p class="text-xl font-bold tracking-tight text-primary">
                     {{ loading ? '—' : (data?.summary?.pendingApproval ?? 0) }}
                   </p>
-                  <router-link
-                    to="/all-requisitions"
-                    class="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-primary transition-colors mt-2 inline-block"
-                    >View list →</router-link
+                  <span class="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mt-1 block"
+                    >Live (all time)</span
                   >
                 </div>
               </div>
 
-              <!-- Approved -->
+              <!-- Approved (date-range scoped) -->
               <div
                 class="glass-card kpi-card p-4 animate-fade-in"
                 style="--card-theme-color: hsl(var(--primary)); animation-delay: 80ms"
@@ -988,22 +897,20 @@ onUnmounted(() => {
                 </div>
                 <div>
                   <p class="text-xl font-bold tracking-tight text-primary">
-                    {{ loading ? '—' : (data?.summary?.approvedThisMonth ?? 0) }}
+                    {{ loading ? '—' : (data?.summary?.approvedInRange ?? 0) }}
                     <span
                       class="text-muted-foreground text-xs font-normal ml-1"
                       v-if="!loading && data?.summary?.approvedPct != null"
                       >({{ data.summary.approvedPct }}%)</span
                     >
                   </p>
-                  <router-link
-                    to="/archive"
-                    class="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-primary transition-colors mt-2 inline-block"
-                    >Archive →</router-link
+                  <span class="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mt-1 block"
+                    >{{ selectedRangeLabel }}</span
                   >
                 </div>
               </div>
 
-              <!-- Rejected -->
+              <!-- Rejected (date-range scoped) -->
               <div
                 class="glass-card kpi-card p-4 animate-fade-in"
                 style="--card-theme-color: hsl(var(--primary)); animation-delay: 160ms"
@@ -1016,17 +923,15 @@ onUnmounted(() => {
                 </div>
                 <div>
                   <p class="text-xl font-bold tracking-tight text-primary">
-                    {{ loading ? '—' : (data?.summary?.rejectedThisMonth ?? 0) }}
+                    {{ loading ? '—' : (data?.summary?.rejectedInRange ?? 0) }}
                     <span
                       class="text-muted-foreground text-xs font-normal ml-1"
                       v-if="!loading && data?.summary?.rejectedPct != null"
                       >({{ data.summary.rejectedPct }}%)</span
                     >
                   </p>
-                  <router-link
-                    to="/archive"
-                    class="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-primary transition-colors mt-2 inline-block"
-                    >Archive →</router-link
+                  <span class="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mt-1 block"
+                    >{{ selectedRangeLabel }}</span
                   >
                 </div>
               </div>
@@ -1052,54 +957,6 @@ onUnmounted(() => {
                   >
                     Target: &lt; 1 Day
                   </p>
-                </div>
-              </div>
-
-              <!-- Total Approved -->
-              <div
-                class="glass-card kpi-card p-4 animate-fade-in"
-                style="--card-theme-color: hsl(var(--primary)); animation-delay: 320ms"
-              >
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-[11px] font-bold uppercase tracking-wider text-muted-foreground"
-                    >Approved Value</span
-                  >
-                  <DollarSign class="h-4 w-4 text-primary" />
-                </div>
-                <div>
-                  <p class="text-xl font-bold tracking-tight text-primary">
-                    {{ loading ? '—' : formatPeso(data?.summary?.totalApprovedValue) }}
-                  </p>
-                  <span
-                    class="text-[9px] font-bold text-muted-foreground uppercase tracking-wider block mt-2"
-                    v-if="!loading"
-                  >
-                    Avg: {{ formatPeso(data?.summary?.avgOrderValue) }} / req
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- High Value Alerts -->
-          <section
-            v-if="!loading && data?.financials?.highValueReqs?.length"
-            class="section alerts-section"
-          >
-            <div class="high-value-banner">
-              <div class="banner-header">
-                <span class="banner-icon">⚠️</span>
-                <div>
-                  <h3 class="banner-title">High-Value Requisitions</h3>
-                  <p class="banner-desc">Significant expenditures in the current period (₱50k+)</p>
-                </div>
-              </div>
-              <div class="banner-items">
-                <div v-for="h in data.financials.highValueReqs" :key="h.id" class="hv-item">
-                  <span class="hv-rf">{{ h.rfControlNo }}</span>
-                  <span class="hv-dept">{{ safeAbbreviate(h.department) }}</span>
-                  <span class="hv-amount">{{ formatPeso(h.total) }}</span>
-                  <router-link :to="'/requisitions/' + h.id" class="hv-link">Review</router-link>
                 </div>
               </div>
             </div>
@@ -1196,28 +1053,16 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="glass-card animate-fade-in lg:col-span-2" style="animation-delay: 550ms">
-              <h3 class="text-lg font-extrabold tracking-tight text-slate-900 mb-2">
-                Spend by Department
-              </h3>
-              <p class="text-xs text-muted-foreground mb-5">
-                Financial allocation across cost centers (Approved Only)
-              </p>
-              <div class="h-[280px]">
-                <canvas id="chart-financials"></canvas>
-              </div>
-            </div>
-
             <div class="glass-card animate-fade-in lg:col-span-2" style="animation-delay: 600ms">
               <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-5">
                 <div>
                   <h3
                     class="text-lg font-extrabold tracking-tight text-slate-900 mb-2"
                   >
-                    Strategic Burn & Volume Trend
+                    Strategic Volume Trend
                   </h3>
                   <p class="text-xs text-muted-foreground">
-                    Trajectory of monthly activity (Volume) vs financial expenditure (Burn)
+                    Trajectory of monthly requisition activity (Volume)
                   </p>
                 </div>
                 <!-- Indicators on the right -->
